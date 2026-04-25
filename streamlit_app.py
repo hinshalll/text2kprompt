@@ -9,24 +9,33 @@ from timezonefinder import TimezoneFinder
 from streamlit_local_storage import LocalStorage
 
 # ══════════════════════════════════════════════════════
-# CONFIG & IMMERSION
+# CONFIG
 # ══════════════════════════════════════════════════════
 st.set_page_config(page_title="Kundli AI", page_icon="🪐", layout="wide",
-                   initial_sidebar_state="expanded")
+                   initial_sidebar_state="collapsed")
 try: swe.set_ephe_path("ephe")
 except: pass
 swe.set_sid_mode(swe.SIDM_LAHIRI)
 
 # ══════════════════════════════════════════════════════
-# CONSTANTS & PDF GUIDES
+# CONSTANTS
 # ══════════════════════════════════════════════════════
-SIGNS = ["Aries","Taurus","Gemini","Cancer","Leo","Virgo","Libra","Scorpio","Sagittarius","Capricorn","Aquarius","Pisces"]
-PLANETS = {"Sun":swe.SUN,"Moon":swe.MOON,"Mars":swe.MARS,"Mercury":swe.MERCURY,"Jupiter":swe.JUPITER,"Venus":swe.VENUS,"Saturn":swe.SATURN}
-DIGNITIES = {"Sun":(0,6),"Moon":(1,7),"Mars":(9,3),"Mercury":(5,11),"Jupiter":(3,9),"Venus":(11,5),"Saturn":(6,0)}
-OWN_SIGNS = {"Sun":[4],"Moon":[3],"Mars":[0,7],"Mercury":[2,5],"Jupiter":[8,11],"Venus":[1,6],"Saturn":[9,10]}
-SIGN_LORDS_MAP = {0:"Mars",1:"Venus",2:"Mercury",3:"Moon",4:"Sun",5:"Mercury",6:"Venus",7:"Mars",8:"Jupiter",9:"Saturn",10:"Saturn",11:"Jupiter"}
+SIGNS = ["Aries","Taurus","Gemini","Cancer","Leo","Virgo",
+         "Libra","Scorpio","Sagittarius","Capricorn","Aquarius","Pisces"]
+PLANETS = {"Sun":swe.SUN,"Moon":swe.MOON,"Mars":swe.MARS,"Mercury":swe.MERCURY,
+           "Jupiter":swe.JUPITER,"Venus":swe.VENUS,"Saturn":swe.SATURN}
+DIGNITIES = {"Sun":(0,6),"Moon":(1,7),"Mars":(9,3),"Mercury":(5,11),
+             "Jupiter":(3,9),"Venus":(11,5),"Saturn":(6,0)}
+OWN_SIGNS = {"Sun":[4],"Moon":[3],"Mars":[0,7],"Mercury":[2,5],
+             "Jupiter":[8,11],"Venus":[1,6],"Saturn":[9,10]}
+SIGN_LORDS_MAP = {0:"Mars",1:"Venus",2:"Mercury",3:"Moon",4:"Sun",5:"Mercury",
+                  6:"Venus",7:"Mars",8:"Jupiter",9:"Saturn",10:"Saturn",11:"Jupiter"}
 COMBUST_DEGREES = {"Mercury":14,"Venus":10,"Mars":17,"Jupiter":11,"Saturn":15}
-NAKSHATRAS = ["Ashwini","Bharani","Krittika","Rohini","Mrigashira","Ardra","Punarvasu","Pushya","Ashlesha","Magha","Purva Phalguni","Uttara Phalguni","Hasta","Chitra","Swati","Vishakha","Anuradha","Jyeshtha","Mula","Purva Ashadha","Uttara Ashadha","Shravana","Dhanishta","Shatabhisha","Purva Bhadrapada","Uttara Bhadrapada","Revati"]
+NAKSHATRAS = ["Ashwini","Bharani","Krittika","Rohini","Mrigashira","Ardra","Punarvasu",
+              "Pushya","Ashlesha","Magha","Purva Phalguni","Uttara Phalguni","Hasta",
+              "Chitra","Swati","Vishakha","Anuradha","Jyeshtha","Mula","Purva Ashadha",
+              "Uttara Ashadha","Shravana","Dhanishta","Shatabhisha","Purva Bhadrapada",
+              "Uttara Bhadrapada","Revati"]
 NAKSHATRA_LORDS = ["Ketu","Venus","Sun","Moon","Mars","Rahu","Jupiter","Saturn","Mercury"]*3
 NAK_NATURES = {
     "Fixed (Dhruva)":  ["Rohini","Uttara Phalguni","Uttara Ashadha","Uttara Bhadrapada"],
@@ -46,15 +55,26 @@ NAK_PLAIN = {
     "Tender (Mridu)":  ("💫 Soft Day","Beautiful energy for romance, creativity, friendships, and arts."),
     "Sharp (Tikshna)": ("🔍 Focused Day","Excellent for deep research, breaking bad habits, or ending things."),
 }
-DASHA_YEARS = {"Ketu":7,"Venus":20,"Sun":6,"Moon":10,"Mars":7,"Rahu":18,"Jupiter":16,"Saturn":19,"Mercury":17}
+DASHA_YEARS = {"Ketu":7,"Venus":20,"Sun":6,"Moon":10,"Mars":7,
+               "Rahu":18,"Jupiter":16,"Saturn":19,"Mercury":17}
 DASHA_ORDER = ["Ketu","Venus","Sun","Moon","Mars","Rahu","Jupiter","Saturn","Mercury"]
-YOGA_NAMES = ["Vishkambha","Priti","Ayushman","Saubhagya","Sobhana","Atiganda","Sukarma","Dhriti","Soola","Ganda","Vriddhi","Dhruva","Vyaghata","Harshana","Vajra","Siddhi","Vyatipata","Variyan","Parigha","Siva","Siddha","Sadhya","Subha","Sukla","Brahma","Indra","Vaidhriti"]
+YOGA_NAMES = ["Vishkambha","Priti","Ayushman","Saubhagya","Sobhana","Atiganda","Sukarma",
+              "Dhriti","Soola","Ganda","Vriddhi","Dhruva","Vyaghata","Harshana","Vajra",
+              "Siddhi","Vyatipata","Variyan","Parigha","Siva","Siddha","Sadhya","Subha",
+              "Sukla","Brahma","Indra","Vaidhriti"]
 YEAR_DAYS=365.2425; MOVABLE_SIGNS={0,3,6,9}; FIXED_SIGNS={1,4,7,10}
-DEB_SIGN_LORDS={"Sun":"Venus","Moon":"Mars","Mars":"Moon","Mercury":"Jupiter","Jupiter":"Saturn","Venus":"Mercury","Saturn":"Mars"}
-EXALT_LORD_IN_DEB_SIGN={"Sun":"Saturn","Moon":None,"Mars":"Jupiter","Mercury":"Venus","Jupiter":"Mars","Venus":"Mercury","Saturn":"Sun"}
-PYTH_MAP={'a':1,'b':2,'c':3,'d':4,'e':5,'f':6,'g':7,'h':8,'i':9,'j':1,'k':2,'l':3,'m':4,'n':5,'o':6,'p':7,'q':8,'r':9,'s':1,'t':2,'u':3,'v':4,'w':5,'x':6,'y':7,'z':8}
-CHALDEAN_MAP={'a':1,'b':2,'c':3,'d':4,'e':5,'f':8,'g':3,'h':5,'i':1,'j':1,'k':2,'l':3,'m':4,'n':5,'o':7,'p':8,'q':1,'r':2,'s':3,'t':4,'u':6,'v':6,'w':6,'x':5,'y':1,'z':7}
-MAJOR_ARCANA=["The Fool","The Magician","The High Priestess","The Empress","The Emperor","The Hierophant","The Lovers","The Chariot","Strength","The Hermit","Wheel of Fortune","Justice","The Hanged Man","Death","Temperance","The Devil","The Tower","The Star","The Moon","The Sun","Judgement","The World"]
+DEB_SIGN_LORDS={"Sun":"Venus","Moon":"Mars","Mars":"Moon","Mercury":"Jupiter",
+                "Jupiter":"Saturn","Venus":"Mercury","Saturn":"Mars"}
+EXALT_LORD_IN_DEB_SIGN={"Sun":"Saturn","Moon":None,"Mars":"Jupiter","Mercury":"Venus",
+                         "Jupiter":"Mars","Venus":"Mercury","Saturn":"Sun"}
+PYTH_MAP={'a':1,'b':2,'c':3,'d':4,'e':5,'f':6,'g':7,'h':8,'i':9,'j':1,'k':2,'l':3,
+          'm':4,'n':5,'o':6,'p':7,'q':8,'r':9,'s':1,'t':2,'u':3,'v':4,'w':5,'x':6,'y':7,'z':8}
+CHALDEAN_MAP={'a':1,'b':2,'c':3,'d':4,'e':5,'f':8,'g':3,'h':5,'i':1,'j':1,'k':2,'l':3,
+              'm':4,'n':5,'o':7,'p':8,'q':1,'r':2,'s':3,'t':4,'u':6,'v':6,'w':6,'x':5,'y':1,'z':7}
+MAJOR_ARCANA=["The Fool","The Magician","The High Priestess","The Empress","The Emperor",
+              "The Hierophant","The Lovers","The Chariot","Strength","The Hermit",
+              "Wheel of Fortune","Justice","The Hanged Man","Death","Temperance",
+              "The Devil","The Tower","The Star","The Moon","The Sun","Judgement","The World"]
 FULL_TAROT_DECK = MAJOR_ARCANA[:]
 for suit in ["Wands","Cups","Swords","Pentacles"]:
     for rank in ["Ace","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Page","Knight","Queen","King"]:
@@ -68,8 +88,7 @@ COMPARISON_CRITERIA=["Wealth Potential — Who builds the most wealth?",
     "Luck & Fortune — Who is the most naturally fortunate?",
     "Spiritual Depth — Who is the most spiritually evolved?",
     "Hidden Pitfalls — Who faces the most unexpected structural problems?"]
-PERSONAL_YEAR_MEANINGS={
-    1:"New beginnings, independence, leadership. Plant seeds now.",
+PERSONAL_YEAR_MEANINGS={1:"New beginnings, independence, leadership. Plant seeds now.",
     2:"Partnership, patience, diplomacy. Relationships are highlighted.",
     3:"Creativity, expression, social energy. A year to shine.",
     4:"Hard work, foundations, discipline. Build something lasting.",
@@ -81,8 +100,7 @@ PERSONAL_YEAR_MEANINGS={
     11:"Intuition, spiritual awakening, inspiration. Master Number energy.",
     22:"Mastery, large-scale building, legacy. Master Number energy.",
     33:"Compassion, teaching, healing. Master Number energy."}
-CELTIC_CROSS_POSITIONS=[
-    "1. The Present — The core issue or central energy",
+CELTIC_CROSS_POSITIONS=["1. The Present — The core issue or central energy",
     "2. The Challenge — What crosses or complicates the present",
     "3. The Foundation — Unconscious influences, deep roots",
     "4. The Past — What is passing or recently passed",
@@ -92,7 +110,6 @@ CELTIC_CROSS_POSITIONS=[
     "8. External Influences — How others or environment affect you",
     "9. Hopes & Fears — Inner tension, what you desire and dread",
     "10. The Outcome — The most likely resolution if path continues"]
-
 PDF_BASE="https://raw.githubusercontent.com/hinshalll/text2kprompt/main/aiguide/"
 PDF_HTRH1=f"{PDF_BASE}htrh1.pdf"
 PDF_HTRH2=f"{PDF_BASE}htrh2.pdf"
@@ -102,7 +119,7 @@ PDF_NUMEW2=f"{PDF_BASE}numeguide2.pdf"
 PDF_NUMEV=f"{PDF_BASE}vedicnume.pdf"
 
 # ══════════════════════════════════════════════════════
-# SESSION STATE & TIME HELPERS
+# SESSION STATE & LOCAL STORAGE
 # ══════════════════════════════════════════════════════
 localS=LocalStorage()
 if 'db' not in st.session_state: st.session_state.db=[]
@@ -139,14 +156,16 @@ if 'select_all_cb' not in st.session_state: st.session_state.select_all_cb=False
 for i in range(len(COMPARISON_CRITERIA)):
     if f"chk_{i}" not in st.session_state: st.session_state[f"chk_{i}"]=False
 
-def get_local_today(tz_string="Asia/Kolkata"):
-    return datetime.now(ZoneInfo(tz_string)).date()
-
-def sync_db(): st.session_state.needs_sync=True
-def is_duplicate_in_db(p): return any(x['name']==p['name'] and x['date']==p['date'] for x in st.session_state.db)
-def format_date_ui(s): return datetime.fromisoformat(s).strftime('%d %b %Y')
-def get_filename(card_name): return card_name.lower().replace(' ','')+'.jpg'
-def set_nav(page): st.session_state.nav_page=page
+def sync_db():
+    st.session_state.needs_sync=True
+def is_duplicate_in_db(p):
+    return any(x['name']==p['name'] and x['date']==p['date'] for x in st.session_state.db)
+def format_date_ui(s):
+    return datetime.fromisoformat(s).strftime('%d %b %Y')
+def get_filename(card_name):
+    return card_name.lower().replace(' ','')+'.jpg'
+def set_nav(page):
+    st.session_state.nav_page=page
 def toggle_all_criteria():
     val=st.session_state.select_all_cb
     for i in range(len(COMPARISON_CRITERIA)): st.session_state[f"chk_{i}"]=val
@@ -163,7 +182,7 @@ def clear_default_profile():
     localS.setItem("kundli_default_profile","")
 
 # ══════════════════════════════════════════════════════
-# GEO, EPHEMERIS & CALC HELPERS
+# BASIC HELPERS
 # ══════════════════════════════════════════════════════
 def sign_name(i): return SIGNS[i%12]
 def sign_index_from_lon(lon): return int(lon//30)%12
@@ -172,6 +191,7 @@ def format_dms(angle):
     if s==60: s,m=0,m+1
     if m==60: m,d=0,d+1
     return f"{d:02d}°{m:02d}'"
+def sign_and_deg(lon): return f"{sign_name(sign_index_from_lon(lon))} {format_dms(lon%30)}"
 def nakshatra_info(lon):
     ns=360/27; idx=min(int((lon%360)//ns),26)
     return NAKSHATRAS[idx],NAKSHATRA_LORDS[idx],int(((lon%360%ns)//(ns/4)))+1
@@ -201,6 +221,9 @@ def get_western_sign(month,day):
         if month<em or (month==em and day<=ed): return sign
     return "Capricorn"
 
+# ══════════════════════════════════════════════════════
+# GEO & EPHEMERIS
+# ══════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
 def geocode_place(place_text):
     try:
@@ -217,13 +240,9 @@ def local_to_julian_day(d,t,tz_name):
 def get_lagna_and_cusps(jd_ut,lat,lon):
     f=swe.FLG_SWIEPH|swe.FLG_SIDEREAL; cusps,ascmc=swe.houses_ex(jd_ut,lat,lon,b"O",f)
     return float(ascmc[0])%360,cusps
-
-def get_planet_metrics(jd_ut, planet_id):
-    """Returns (longitude, latitude, speed). Fixed for Graha Yuddha calculation."""
-    f = swe.FLG_SWIEPH | swe.FLG_SIDEREAL | swe.FLG_SPEED
-    res, _ = swe.calc_ut(jd_ut, planet_id, f)
-    return float(res[0])%360, float(res[1]), float(res[3])
-
+def get_planet_longitude_and_speed(jd_ut,planet_id):
+    f=swe.FLG_SWIEPH|swe.FLG_SIDEREAL|swe.FLG_SPEED; res,_=swe.calc_ut(jd_ut,planet_id,f)
+    return float(res[0])%360,float(res[3])
 def get_rahu_longitude(jd_ut):
     res,_=swe.calc_ut(jd_ut,swe.MEAN_NODE,swe.FLG_SWIEPH|swe.FLG_SIDEREAL)
     return float(res[0])%360
@@ -231,26 +250,30 @@ def get_placidus_cusps(jd_ut,lat,lon):
     cusps,_=swe.houses_ex(jd_ut,lat,lon,b"P",swe.FLG_SWIEPH|swe.FLG_SIDEREAL)
     return cusps
 
+# ══════════════════════════════════════════════════════
+# LIVE COSMIC WEATHER (cached hourly)
+# ══════════════════════════════════════════════════════
 @st.cache_data(ttl=3600,show_spinner=False)
 def get_live_cosmic_weather():
     dt_now=datetime.now(ZoneInfo("UTC"))
     jd=swe.julday(dt_now.year,dt_now.month,dt_now.day,dt_now.hour+dt_now.minute/60.0)
-    moon_metrics=get_planet_metrics(jd,swe.MOON); sun_metrics=get_planet_metrics(jd,swe.SUN)
-    moon_sidx=sign_index_from_lon(moon_metrics[0]); sun_sidx=sign_index_from_lon(sun_metrics[0])
-    nak,_,_=nakshatra_info(moon_metrics[0]); panch=get_panchanga(sun_metrics[0],moon_metrics[0],dt_now)
+    moon_lon,_=swe.calc_ut(jd,swe.MOON,swe.FLG_SWIEPH|swe.FLG_SIDEREAL)
+    sun_lon,_=swe.calc_ut(jd,swe.SUN,swe.FLG_SWIEPH|swe.FLG_SIDEREAL)
+    moon_sidx=sign_index_from_lon(moon_lon[0]); sun_sidx=sign_index_from_lon(sun_lon[0])
+    nak,_,_=nakshatra_info(moon_lon[0]); panch=get_panchanga(sun_lon[0],moon_lon[0],dt_now)
     retrogrades=[]
     for pname in ["Mars","Mercury","Jupiter","Venus","Saturn"]:
-        _,_,spd=get_planet_metrics(jd,PLANETS[pname])
+        _,spd=get_planet_longitude_and_speed(jd,PLANETS[pname])
         if spd<0: retrogrades.append(pname)
     nature_type="Mixed (Mishra)"; plain_title,plain_desc=NAK_PLAIN["Mixed (Mishra)"]
     for nt,naks in NAK_NATURES.items():
         if nak in naks: nature_type=nt; plain_title,plain_desc=NAK_PLAIN[nt]; break
     all_pos={}
     for pname,pid in PLANETS.items():
-        lon,_,_=get_planet_metrics(jd,pid); all_pos[pname]=f"{sign_name(sign_index_from_lon(lon))} {format_dms(lon%30)}"
-    r_lon=get_rahu_longitude(jd)
-    all_pos["Rahu"]=f"{sign_name(sign_index_from_lon(r_lon))} {format_dms(r_lon%30)}"
-    all_pos["Ketu"]=f"{sign_name(sign_index_from_lon((r_lon+180)%360))} {format_dms((r_lon+180)%30)}"
+        lon,_=get_planet_longitude_and_speed(jd,pid); all_pos[pname]=sign_name(sign_index_from_lon(lon))
+    r_lon,_=swe.calc_ut(jd,swe.MEAN_NODE,swe.FLG_SWIEPH|swe.FLG_SIDEREAL)
+    all_pos["Rahu"]=sign_name(sign_index_from_lon(float(r_lon[0])%360))
+    all_pos["Ketu"]=sign_name(sign_index_from_lon((float(r_lon[0])+180)%360))
     return {"moon_sign":sign_name(moon_sidx),"sun_sign":sign_name(sun_sidx),"nakshatra":nak,
             "tithi":panch["tithi"],"yoga":panch["yoga"],"retrogrades":retrogrades,
             "nature":nature_type,"plain_title":plain_title,"plain_desc":plain_desc,"all_pos":all_pos}
@@ -266,20 +289,16 @@ def get_kp_sub_lord(lon):
         acc+=(DASHA_YEARS[sl]/120.0)*ns
         if deg<=acc+1e-9: return sl
     return seq[-1]
-
 def get_vedic_aspects(planet_name,current_house):
     jumps={"Mars":[4,7,8],"Jupiter":[5,7,9],"Saturn":[3,7,10],"Rahu":[5,7,9],"Ketu":[5,7,9]}.get(planet_name,[7])
     return ", ".join(str(((current_house+j-2)%12)+1) for j in jumps)
-
 def get_planet_lon(pname,planet_data,r_lon,k_lon):
     if pname in planet_data: return planet_data[pname][0]
     elif pname=="Rahu": return r_lon
     elif pname=="Ketu": return k_lon
-
 def get_planet_house(pname,lagna_sidx,planet_data,r_lon,k_lon):
     lon=get_planet_lon(pname,planet_data,r_lon,k_lon)
     return whole_sign_house(lagna_sidx,sign_index_from_lon(lon)) if lon is not None else None
-
 def get_lagna_lord_chain(lagna_sidx,planet_data,r_lon,k_lon):
     ll=SIGN_LORDS_MAP[lagna_sidx]; ll_lon=get_planet_lon(ll,planet_data,r_lon,k_lon)
     ll_sidx=sign_index_from_lon(ll_lon); ll_house=whole_sign_house(lagna_sidx,ll_sidx)
@@ -288,17 +307,15 @@ def get_lagna_lord_chain(lagna_sidx,planet_data,r_lon,k_lon):
         if ll_sidx==DIGNITIES[ll][0]: tags.append("Exalted")
         elif ll_sidx==DIGNITIES[ll][1]: tags.append("Debilitated")
     if ll in OWN_SIGNS and ll_sidx in OWN_SIGNS[ll]: tags.append("Own Sign")
-    if ll in planet_data and planet_data[ll][2]<0: tags.append("Retrograde") # [2] is speed
+    if ll in planet_data and planet_data[ll][1]<0: tags.append("Retrograde")
     tag_str=f" [{', '.join(tags)}]" if tags else ""
     disp=SIGN_LORDS_MAP[ll_sidx]; disp_house=get_planet_house(disp,lagna_sidx,planet_data,r_lon,k_lon)
     return f"{ll} → H{ll_house} ({sign_name(ll_sidx)}{tag_str}) → dispositor {disp} in H{disp_house}"
-
 def get_conjunctions(lagna_sidx,planet_data,r_lon,k_lon):
     all_p={}
-    for pn,metrics in planet_data.items(): h=whole_sign_house(lagna_sidx,sign_index_from_lon(metrics[0])); all_p.setdefault(h,[]).append(pn)
+    for pn,(plon,_) in planet_data.items(): h=whole_sign_house(lagna_sidx,sign_index_from_lon(plon)); all_p.setdefault(h,[]).append(pn)
     for pn,plon in [("Rahu",r_lon),("Ketu",k_lon)]: h=whole_sign_house(lagna_sidx,sign_index_from_lon(plon)); all_p.setdefault(h,[]).append(pn)
     return [f"{' + '.join(plist)} conjunct in H{h} ({sign_name((lagna_sidx+h-1)%12)})" for h,plist in all_p.items() if len(plist)>=2]
-
 def get_mutual_aspects(lagna_sidx,planet_data,r_lon,k_lon):
     spec={"Mars":[4,7,8],"Jupiter":[5,7,9],"Saturn":[3,7,10],"Rahu":[5,7,9],"Ketu":[5,7,9]}
     def asp(pn,h): return {((h+j-2)%12)+1 for j in spec.get(pn,[7])}
@@ -313,21 +330,19 @@ def get_mutual_aspects(lagna_sidx,planet_data,r_lon,k_lon):
     return mutual
 
 def detect_graha_yuddha(planet_data):
-    """FIXED: Planetary War winner is decided by celestial latitude (North/South), not longitude."""
-    eligible = {pn: (planet_data[pn][0], planet_data[pn][1]) for pn in ["Mars","Mercury","Jupiter","Venus","Saturn"]}
-    plist = list(eligible.items())
-    wars = []
-    for i, (p1, (l1_lon, l1_lat)) in enumerate(plist):
-        for p2, (l2_lon, l2_lat) in plist[i+1:]:
-            diff = abs(l1_lon - l2_lon)
-            diff = min(diff, 360 - diff)
-            if diff <= 1.0:
-                winner = p1 if l1_lat > l2_lat else p2
-                loser  = p2 if l1_lat > l2_lat else p1
-                wars.append((winner, loser, round(diff, 3)))
+    """Planetary War: two planets within 1° — impacts must be pre-stated for AI."""
+    eligible={pn:planet_data[pn][0] for pn in ["Mars","Mercury","Jupiter","Venus","Saturn"]}
+    plist=list(eligible.items()); wars=[]
+    for i,(p1,l1) in enumerate(plist):
+        for p2,l2 in plist[i+1:]:
+            diff=abs(l1-l2); diff=min(diff,360-diff)
+            if diff<=1.0:
+                winner=p1 if l1>l2 else p2; loser=p2 if l1>l2 else p1
+                wars.append((winner,loser,round(diff,3)))
     return wars
 
 def get_functional_planets(lagna_sidx):
+    """Compute functional benefics, malefics, and yogakarakas for this Lagna."""
     trikona={1,5,9}; kendra={1,4,7,10}; trika={6,8,12}
     house_lords={}
     for h in range(1,13): lord=SIGN_LORDS_MAP[(lagna_sidx+h-1)%12]; house_lords.setdefault(lord,[]).append(h)
@@ -342,6 +357,7 @@ def get_functional_planets(lagna_sidx):
     return benefics,malefics,yogakarakas,neutral
 
 def get_house_strength_summary(lagna_sidx,planet_data,r_lon,k_lon,placidus_cusps):
+    """Pre-compute one-line verdict for key life houses — prevents AI guessing."""
     key_houses={7:("Marriage & Spouse",{2,7,11}),10:("Career & Status",{1,6,10,11}),
                 2:("Wealth & Family",{2,11}),5:("Intelligence & Children",{5,11}),
                 4:("Home & Mother",{4,12}),11:("Gains & Desires",{3,6,11})}
@@ -529,6 +545,9 @@ def get_kp_verdict(cusp_lon,lagna_sidx,planet_data,r_lon,k_lon,event_houses,even
     else: verdict="NOT CLEARLY PROMISED"
     return sl,nl,verdict,sig_str
 
+# ══════════════════════════════════════════════════════
+# VIMSHOTTARI DASHA ENGINE
+# ══════════════════════════════════════════════════════
 def build_vimshottari_timeline(dt_birth,moon_lon,dt_now):
     ns=360/27; idx=int((moon_lon%360)//ns); lord=NAKSHATRA_LORDS[idx]
     bal=DASHA_YEARS[lord]*(1-((moon_lon%360%ns)/ns))
@@ -568,19 +587,29 @@ def get_antardasha_table(dasha_info):
         cursor=ad_end
     return lines
 
-def d2_sign_index(lon): s=sign_index_from_lon(lon); d=lon%30; return (4 if d<15 else 3) if s%2==0 else (3 if d<15 else 4)
+# Divisional chart helpers
+def d2_sign_index(lon):
+    s=sign_index_from_lon(lon); d=lon%30
+    return (4 if d<15 else 3) if s%2==0 else (3 if d<15 else 4)
 def d3_sign_index(lon): return (sign_index_from_lon(lon)+int((lon%30)//10)*4)%12
 def d4_sign_index(lon): return (sign_index_from_lon(lon)+int((lon%30)//7.5)*3)%12
-def saptamsa_sign_index(lon): s=sign_index_from_lon(lon); slot=int((lon%360%30)//(30/7)); return ((s if s%2==0 else (s+6)%12)+slot)%12
-def navamsa_sign_index(lon): s=sign_index_from_lon(lon); slot=int((lon%360%30)//(30/9)); start=s if s in MOVABLE_SIGNS else ((s+8)%12 if s in FIXED_SIGNS else (s+4)%12); return (start+slot)%12
-def dasamsa_sign_index(lon): s=sign_index_from_lon(lon); slot=int((lon%360%30)//3); return ((s if s%2==0 else (s+8)%12)+slot)%12
+def saptamsa_sign_index(lon):
+    s=sign_index_from_lon(lon); slot=int((lon%360%30)//(30/7))
+    return ((s if s%2==0 else (s+6)%12)+slot)%12
+def navamsa_sign_index(lon):
+    s=sign_index_from_lon(lon); slot=int((lon%360%30)//(30/9))
+    start=s if s in MOVABLE_SIGNS else ((s+8)%12 if s in FIXED_SIGNS else (s+4)%12)
+    return (start+slot)%12
+def dasamsa_sign_index(lon):
+    s=sign_index_from_lon(lon); slot=int((lon%360%30)//3)
+    return ((s if s%2==0 else (s+8)%12)+slot)%12
 def dwadasamsa_sign_index(lon): return (sign_index_from_lon(lon)+int((lon%360%30)//2.5))%12
 def d60_sign_index(lon): return (sign_index_from_lon(lon)+int((lon%30)*2))%12
 
 def get_moon_lon_from_profile(profile):
     d=date.fromisoformat(profile['date']) if isinstance(profile['date'],str) else profile['date']
     t=(datetime.strptime(profile['time'],"%H:%M").time() if isinstance(profile['time'],str) else profile['time'])
-    jd,_,__=local_to_julian_day(d,t,profile['tz']); lon,_,_=get_planet_metrics(jd,PLANETS["Moon"]); return lon
+    jd,_,__=local_to_julian_day(d,t,profile['tz']); lon,_=get_planet_longitude_and_speed(jd,PLANETS["Moon"]); return lon
 
 # ══════════════════════════════════════════════════════
 # MASTER DOSSIER GENERATOR
@@ -593,14 +622,13 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
     jd_ut,dt_local,_=local_to_julian_day(prof_date,prof_time,tz_name)
     lagna_lon,_=get_lagna_and_cusps(jd_ut,lat,lon)
     placidus_cusps=get_placidus_cusps(jd_ut,lat,lon)
-    planet_data={pn:get_planet_metrics(jd_ut,pid) for pn,pid in PLANETS.items()} # (lon, lat, speed)
+    planet_data={pn:get_planet_longitude_and_speed(jd_ut,pid) for pn,pid in PLANETS.items()}
     r_lon=get_rahu_longitude(jd_ut); k_lon=(r_lon+180.0)%360
     dasha_info=build_vimshottari_timeline(dt_local,planet_data["Moon"][0],datetime.now(ZoneInfo(tz_name)))
     panchanga=get_panchanga(planet_data["Sun"][0],planet_data["Moon"][0],dt_local)
     lagna_sidx=sign_index_from_lon(lagna_lon)
     moon_sidx=sign_index_from_lon(planet_data["Moon"][0])
     mars_sidx=sign_index_from_lon(planet_data["Mars"][0])
-    
     ll_chain=get_lagna_lord_chain(lagna_sidx,planet_data,r_lon,k_lon)
     conjunctions=get_conjunctions(lagna_sidx,planet_data,r_lon,k_lon)
     mutual_asp=get_mutual_aspects(lagna_sidx,planet_data,r_lon,k_lon)
@@ -615,7 +643,6 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
     kp7_sl,kp7_nl,kp7_verdict,kp7_sigs=get_kp_verdict(placidus_cusps[6],lagna_sidx,planet_data,r_lon,k_lon,{2,7,11},"Marriage")
     kp10_sl,kp10_nl,kp10_verdict,kp10_sigs=get_kp_verdict(placidus_cusps[9],lagna_sidx,planet_data,r_lon,k_lon,{1,6,10,11},"Career")
     lat_lbl=f"{abs(lat):.5f}{'N' if lat>=0 else 'S'}"; lon_lbl=f"{abs(lon):.5f}{'E' if lon>=0 else 'W'}"
-    
     lines=[]
     lines.append(f"{'═'*60}\nKUNDLI DOSSIER — {name.upper()}")
     lines.append(f"System: Swiss Ephemeris | Lahiri Ayanamsa | Whole Sign + Placidus KP\n{'═'*60}")
@@ -637,7 +664,7 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
     lines.append(f"\n━━━ PLANETARY POSITIONS — D1 RASI ━━━")
     house_occupants={i:[] for i in range(1,13)}
     for pname in ["Sun","Moon","Mars","Mercury","Jupiter","Venus","Saturn"]:
-        plon,plat,pspd=planet_data[pname]; sidx=sign_index_from_lon(plon); house=whole_sign_house(lagna_sidx,sidx)
+        plon,pspd=planet_data[pname]; sidx=sign_index_from_lon(plon); house=whole_sign_house(lagna_sidx,sidx)
         nak,nak_lord,pada=nakshatra_info(plon); avastha=get_baladi_avastha(plon); sub_lord=get_kp_sub_lord(plon)
         aspects=get_vedic_aspects(pname,house); house_occupants[house].append(pname)
         tags=[]
@@ -656,7 +683,6 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
         nak,nak_lord,pada=nakshatra_info(plon); sub_lord=get_kp_sub_lord(plon)
         aspects=get_vedic_aspects(pname,house); house_occupants[house].append(pname)
         lines.append(f"  {pname}: H{house}|{sign_name(sidx)} {format_dms(plon%30)} [Retrograde]|Nak:{nak}(NL:{nak_lord} SL:{sub_lord} Pada:{pada})|Aspects:H{aspects}")
-    
     lines.append(f"\n━━━ PRE-COMPUTED CRITICAL FACTS ━━━")
     lines.append("(Mathematically verified — DO NOT re-derive or override any of these)")
     lines.append("\n[CONJUNCTIONS]")
@@ -665,15 +691,13 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
     lines.append("\n[MUTUAL ASPECTS]")
     for m in mutual_asp: lines.append(f"  ↔ {m}")
     if not mutual_asp: lines.append("  None")
-    
     lines.append("\n[GRAHA YUDDHA — PLANETARY WAR]")
     if graha_yuddha:
         for winner,loser,deg in graha_yuddha:
-            lines.append(f"  ⚔️ {winner} vs {loser} (separation: {deg}°) — {winner} WINS the war (higher celestial latitude).")
+            lines.append(f"  ⚔️ {winner} vs {loser} (separation: {deg}°) — {winner} WINS the war.")
             lines.append(f"     → {loser}'s significations are weakened/suppressed despite its house placement.")
             lines.append(f"     → {winner}'s significations are amplified.")
     else: lines.append("  No Graha Yuddha in this chart.")
-    
     lines.append("\n[NEECHA BHANGA — DEBILITATION CANCELLATION]")
     nb_found=False
     for pname in ["Sun","Moon","Mars","Mercury","Jupiter","Venus","Saturn"]:
@@ -689,28 +713,23 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
                 lines.append(f"  {pname} — Debilitated in {sign_name(psidx)}. NO NEECHA BHANGA.")
                 lines.append(f"    → INTERPRET AS: Genuinely weakened.")
     if not nb_found: lines.append("  No debilitated planets.")
-    
     lines.append("\n[YOGA VERDICTS — PRESENT ✓]")
     for yname,ydesc in yogas_present: lines.append(f"  ✓ {yname}: {ydesc}")
     if not yogas_present: lines.append("  None detected.")
     lines.append("[YOGA VERDICTS — ABSENT ✗ (do NOT mention these in the reading)]")
     for ya in yogas_absent: lines.append(f"  ✗ {ya}")
-    
     lines.append("\n[JAIMINI KARAKAS]")
     lines.append(f"  Atmakaraka (soul/self): {ak} ({ak_deg:.2f}° within sign)")
     lines.append(f"  Amatyakaraka (mind/career): {amk} ({amk_deg:.2f}° within sign)")
-    
     lines.append(f"\n━━━ HOUSE STRENGTH SUMMARY ━━━")
     lines.append("(Pre-computed verdicts for key life domains — use these directly)")
     for hs in house_summary: lines.append(f"  {hs}")
-    
     lines.append(f"\n━━━ HOUSE RULERSHIP MAP ━━━")
     for h in range(1,13):
         h_sidx=(lagna_sidx+h-1)%12; h_lord=SIGN_LORDS_MAP[h_sidx]
         ll_house=get_planet_house(h_lord,lagna_sidx,planet_data,r_lon,k_lon)
         occ=", ".join(house_occupants[h]) if house_occupants[h] else "Empty"
         lines.append(f"  H{h:02d}({sign_name(h_sidx)}): Lord={h_lord}(H{ll_house}) | Occupants: {occ}")
-        
     if not compact:
         lines.append(f"\n━━━ KP — PLACIDUS CUSPS ━━━")
         lines.append("(Layer 2: Use ONLY for event timing and promise — not for character analysis)")
@@ -723,7 +742,6 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
         lines.append(f"    Rule: Promised if SL signifies H2(family)+H7(spouse)+H11(fulfillment)")
         lines.append(f"  ▶ CAREER:   10th Cusp SL={kp10_sl}(NL:{kp10_nl}) | Signifies: {kp10_sigs} | VERDICT: {kp10_verdict}")
         lines.append(f"    Rule: Promised if SL signifies H1+H6+H10+H11")
-        
     lines.append(f"\n━━━ DIVISIONAL CHARTS ━━━")
     all_pnames=["Sun","Moon","Mars","Mercury","Jupiter","Venus","Saturn","Rahu","Ketu"]
     d2,d3,d4,d7,d9,d10,d12,d60=[],[],[],[],[],[],[],[]
@@ -742,7 +760,6 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
     lines.append(f"  D7  Saptam   (Children):        {', '.join(d7)}")
     lines.append(f"  D12 Dwadam   (Parents/Roots):   {', '.join(d12)}")
     if include_d60: lines.append(f"  D60 Shashtiam(Karma/Fate):      {', '.join(d60)}")
-    
     lines.append(f"\n━━━ VIMSHOTTARI DASHA TIMING ━━━")
     lines.append(f"Birth Nakshatra: {dasha_info['birth_nakshatra']} | Balance at birth: {dasha_info['balance_years']:.2f} yrs of {dasha_info['start_lord']}")
     lines.append(f"Current Mahadasha : {dasha_info['current_md']} ({dasha_info['md_start'].strftime('%b %Y')} → {dasha_info['md_end'].strftime('%b %Y')})")
@@ -751,54 +768,64 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
     lines.append(f"\nFULL ANTARDASHA SEQUENCE IN {dasha_info['current_md'].upper()} MAHADASHA:")
     lines.append("(Use ONLY these exact dates. Do not calculate independently.)")
     for row in ad_table: lines.append(row)
-    
     lines.append(f"\n━━━ CURRENT AFFLICTIONS & TRANSITS ━━━")
     lines.append(f"Sade Sati: {sade_sati}")
     lines.append(f"Manglik Status: {manglik}")
     lines.append(f"Jaimini Atmakaraka: {ak} | Amatyakaraka: {amk}")
-    
     return "\n".join(lines)
 
 # ══════════════════════════════════════════════════════
-# XML PROMPT ENGINEERING & GUARDRAILS
+# MASTER GUARDRAILS
 # ══════════════════════════════════════════════════════
 GUARDRAILS=f"""
+╔══════════════════════════════════════════════════════════════╗
+║      MASTER ASTROLOGER PROTOCOL — HYBRID PARASHARI + KP     ║
+╚══════════════════════════════════════════════════════════════╝
+
 ROLE: Elite Vedic astrologer. All values PRE-COMPUTED by Swiss Ephemeris.
 Your role is INTERPRETATION ONLY — never recalculate anything.
 
 ══ PRIMARY KNOWLEDGE BASE (MANDATORY — read before interpreting) ══
-You MUST strictly adhere to the following PDF guides. Do NOT use outside knowledge:
+All rules, definitions, and interpretive logic MUST come from:
 1. {PDF_HTRH1}
 2. {PDF_HTRH2}
+These are your absolute master references. External logic that contradicts them is forbidden.
 
 ══ THE TWO-LAYER METHOD (apply to every life domain) ══
-LAYER 1 — PARASHARI ("What & Why"): Use D1 chart, house lords, yogas, divisional charts for character and karmic blueprint.
-LAYER 2 — KP ("Whether & When"): Use Placidus cusp Sub-Lords and Antardasha Table for event promise and timing.
+LAYER 1 — PARASHARI ("What & Why"):
+  Use D1 chart, house lords, yogas, divisional charts for character and karmic blueprint.
+LAYER 2 — KP ("Whether & When"):
+  Use Placidus cusp Sub-Lords and Antardasha Table for event promise and timing.
 Synthesis: State Parashari first, then confirm/qualify with KP. If they conflict, note it.
 
 ══ ABSOLUTE LAWS (one violation invalidates the entire reading) ══
-1. DATA IS IMMUTABLE: Every value is locked. Do NOT re-derive house lords, positions, KP Sub-Lords, yoga verdicts, karakas, or Dasha dates.
-2. FUNCTIONAL PLANETS ARE PRE-CLASSIFIED: Use the FUNCTIONAL PLANETS section exactly. Do not reclassify.
-3. GRAHA YUDDHA IS PRE-DECIDED: If a planet lost a war, its significations are suppressed. If it won, they are amplified.
-4. CONJUNCTIONS ONLY FROM LIST: Use only the pre-listed conjunctions.
+1. DATA IS IMMUTABLE: Every value is locked. Do NOT re-derive house lords, positions,
+   KP Sub-Lords, yoga verdicts, karakas, or Dasha dates.
+2. FUNCTIONAL PLANETS ARE PRE-CLASSIFIED: Use the FUNCTIONAL PLANETS section exactly.
+   Do not reclassify any planet's functional nature.
+3. GRAHA YUDDHA IS PRE-DECIDED: If a planet lost a war, its significations are suppressed.
+   If it won, its significations are amplified. Do not ignore this.
+4. CONJUNCTIONS ONLY FROM LIST: Use only the pre-listed conjunctions. Do not infer new ones.
 5. NEECHA BHANGA IS FINAL: APPLIES → treat as Raja Yoga. DOES NOT APPLY → genuinely weak.
 6. YOGAS ARE FINAL: Only reference ✓ PRESENT yogas. Never mention ✗ ABSENT yogas.
 7. DASHA DATES ARE LOCKED: Use ONLY the Antardasha Table dates.
 8. HOUSE STRENGTH SUMMARY IS PRE-COMPUTED: Use those verdicts directly.
-9. PROVE EVERY CLAIM: Format: "Saturn[H7, Exalted] sub-lords the 7th cusp, signifying H2+H7+H11, confirming..."
+9. KP VERDICTS ARE FINAL: Apply the Marriage/Career verdicts exactly as given.
+10. PROVE EVERY CLAIM: Format: "Saturn[H7, Exalted] sub-lords the 7th cusp, signifying H2+H7+H11, confirming..."
 """
 
+# ══════════════════════════════════════════════════════
+# PROMPT BUILDERS
+# ══════════════════════════════════════════════════════
 def build_deep_analysis_prompt(dossier):
-    return f"""<context>
-<system_rules>
-{GUARDRAILS}
-</system_rules>
-<task>
+    return GUARDRAILS+"""
+
 MISSION: Complete life reading. Each section MUST cite specific chart data.
 
 ## 1. Core Identity & Lagna
    DATA: Ascendant, LAGNA LORD CHAIN, FUNCTIONAL PLANETS classification, H1 occupants.
-   PARASHARI: Personality, constitution, approach to life. KP: H1 cusp Sub-Lord.
+   PARASHARI: Personality, constitution, approach to life.
+   KP: H1 cusp Sub-Lord significations.
 
 ## 2. Mind & Emotional World
    DATA: Moon (sign, house, nakshatra, Avastha, Sade Sati).
@@ -811,121 +838,92 @@ MISSION: Complete life reading. Each section MUST cite specific chart data.
 
 ## 4. Wealth & Finances
    DATA: H2+H11 lords, D2 Hora, Dhana Yogas from YOGA VERDICTS, HOUSE STRENGTH SUMMARY H2+H11.
+   State which specific yogas (PRESENT only) support or hinder wealth.
 
 ## 5. Relationships & Marriage
    DATA: H7 lord/sign, D9 Navamsa H7, HOUSE STRENGTH SUMMARY H7, KP Marriage Verdict.
+   PARASHARI: Spouse nature from D1+D9. KP: Apply Marriage Verdict exactly, explain timing.
 
 ## 6. Health & Longevity
-   DATA: H1, H6, H8 lords and occupants. Note any GRAHA YUDDHA losers.
+   DATA: H1, H6, H8 lords and occupants. Combust or debilitated planets (post-Neecha Bhanga check).
+   Note any GRAHA YUDDHA losers — their health significations are suppressed.
 
 ## 7. Current Dasha Phase
    DATA: Full Antardasha Table, Sade Sati, current MD/AD/PD.
-   Analyse current combination. Identify next 2-3 sub-period shifts from the table. DO NOT generate new dates.
+   Analyse current combination. Identify next 2-3 sub-period shifts from the table.
+   DO NOT generate new dates — use ONLY the provided table.
 
 ## 8. Practical Remedies
-   Only for planets that are: Debilitated WITHOUT Neecha Bhanga, Combust, lost Graha Yuddha, or Retrograde in sensitive house. No remedies for strong planets.
-</task>
-<user_chart_data>
-{dossier}
-</user_chart_data>
-</context>"""
+   Only for planets that are: Debilitated WITHOUT Neecha Bhanga, Combust, lost Graha Yuddha,
+   or Retrograde in a sensitive house. No remedies for strong planets.
+
+"""+dossier
 
 def build_matchmaking_prompt(dossier_a,dossier_b,koota_score,manglik_cancellation):
-    return f"""<context>
-<system_rules>
-{GUARDRAILS}
-</system_rules>
-<task>
+    return GUARDRAILS+f"""
+
 MISSION: Definitive compatibility analysis.
 
 ## 1. Ashta Koota Guna Milan
    CRITICAL: Use this pre-computed score exactly — do NOT recalculate:
-   {koota_score}
+{koota_score}
    Explain practical meaning of any Koota scoring 0.
 
 ## 2. Manglik Dosha
    Pre-computed verdict: {manglik_cancellation}
+   State implications. If cancelled, confirm no remedies needed for this.
 
 ## 3. Parashari Compatibility (D1 + D9)
    Compare 7th house lords, signs, D9 charts. Check if charts mirror each other.
-   Verify Lagna lord friendship/enmity.
+   Verify Lagna lord friendship/enmity between the two.
 
 ## 4. KP Marriage Promise & Timing
-   Apply each person's pre-computed KP Marriage Verdict. Use ONLY their Antardasha Tables for timing.
+   Apply each person's pre-computed KP Marriage Verdict (from HOUSE STRENGTH SUMMARY H7).
+   Use ONLY their Antardasha Tables for timing — never calculate independently.
 
 ## 5. Long-Term Harmony & Friction
-   Identify temperament clashes and specific houses that will cause friction.
+   Use Gana, Graha Maitri, Bhakoot scores to identify temperament clashes.
+   Cite specific houses that will cause friction (and relief).
 
 ## 6. Final Verdict
    Score out of 10 with evidence. List only genuinely required remedies.
-</task>
-<person_1_data>
+
+━━━ PERSON 1 DOSSIER ━━━
 {dossier_a}
-</person_1_data>
-<person_2_data>
-{dossier_b}
-</person_2_data>
-</context>"""
+
+━━━ PERSON 2 DOSSIER ━━━
+{dossier_b}"""
 
 def build_comparison_prompt(profiles_dossiers,criteria):
-    prompt=f"<context>\n<system_rules>\n{GUARDRAILS}\n</system_rules>\n<task>\nMISSION: Compare individuals on listed parameters.\n\nPARAMETERS:\n"
+    prompt=GUARDRAILS+"\n\nMISSION: Compare individuals on listed parameters.\n\nPARAMETERS:\n"
     for c in criteria: prompt+=f"  - {c}\n"
     prompt+=("\nRULES:\n1. Rank all individuals per parameter, highest to lowest.\n"
-             "2. Every rank requires specific evidence (planet, house, dignity, yoga, or KP verdict).\n"
+             "2. Every rank requires specific evidence (planet, house, dignity, yoga, or KP verdict from their dossier).\n"
              "3. Use Parashari for character/potential. Use KP+HOUSE STRENGTH SUMMARY for event-based parameters.\n"
-             "4. Never reference ABSENT yogas.\n5. State final ranking as a numbered list then explain.\n</task>\n<profiles_data>\n")
+             "4. Never reference ABSENT yogas.\n5. State final ranking as a numbered list then explain.\n\n")
     for i,(name,dossier) in enumerate(profiles_dossiers): prompt+=f"━━━ PROFILE {i+1}: {name.upper()} ━━━\n{dossier}\n\n"
-    prompt += "</profiles_data>\n</context>"
     return prompt
 
 def build_prashna_prompt(question,dossier):
-    return f"""<context>
-<system_rules>
-{GUARDRAILS}
-</system_rules>
-<task>
+    return GUARDRAILS+f"""
+
 MISSION: PRASHNA (Horary) reading — cast for this exact moment, for this question ONLY.
+
 QUESTION: "{question}"
 
 PRASHNA RULES:
 1. Lagna and its lord = the querent.
 2. Relevant house by question type:
-   Career/Job=H10 | Marriage=H7 | Money=H2,H11 | Health=H1,H6 | Children=H5 | Property=H4 | Travel/Foreign=H9,H12 | Education=H4,H5 | Enemies/Legal=H6,H7
-3. PARASHARI: Strong relevant house lord (in own/exalt, or Kendra/Trikona) → Favourable. Weak (debilitated, combust, H6/H8/H12) → Delay or denial.
+   Career/Job=H10 | Marriage=H7 | Money=H2,H11 | Health=H1,H6 | Children=H5
+   Property=H4 | Travel/Foreign=H9,H12 | Education=H4,H5 | Enemies/Legal=H6,H7
+3. PARASHARI: Strong relevant house lord (in own/exalt, or Kendra/Trikona) → Favourable.
+   Weak (debilitated, combust, H6/H8/H12) → Delay or denial.
 4. KP: Apply the HOUSE STRENGTH SUMMARY verdict for the relevant house.
 5. Moon's nakshatra and current dasha provide timing context.
 6. MANDATORY FINAL LINE: "VERDICT: [Yes / No / Delayed] — [one sentence summary]"
-</task>
-<prashna_chart>
-{dossier}
-</prashna_chart>
-</context>"""
 
-def build_transit_prompt(dossier, cw):
-    return f"""<context>
-<system_rules>
-{GUARDRAILS}
-</system_rules>
-<task>
-MISSION: Gochara (Live Transit) overlay reading.
-You are tasked with analyzing how today's live transiting planets are activating the user's locked natal chart.
-
-1. Overlay the <live_transits> onto the <user_chart_data>.
-2. Identify which natal houses the current transiting planets are occupying.
-3. Note if any transiting retrograde planets are hitting sensitive natal points.
-4. Synthesize the current Moon's Nakshatra ({cw['nakshatra']}) with the user's active Antardasha to predict the immediate 48-hour emotional and practical theme.
-5. Deliver a targeted, highly specific daily/weekly forecast.
-</task>
-<live_transits>
-Current Moon Sign: {cw['moon_sign']}
-Current Moon Nakshatra: {cw['nakshatra']}
-Retrograde Planets Today: {cw['retrogrades']}
-All Ephemeris Positions Today: {cw['all_pos']}
-</live_transits>
-<user_chart_data>
-{dossier}
-</user_chart_data>
-</context>"""
+━━━ PRASHNA CHART ━━━
+{dossier}"""
 
 # ══════════════════════════════════════════════════════
 # NUMEROLOGY ENGINE
@@ -951,36 +949,29 @@ def calculate_numerology_core(name,dob_str,system="Western (Pythagorean)"):
     return _reduce(life_path),_reduce(dest_sum),_reduce(soul_sum),_reduce(pers_sum)
 
 def get_personal_year(dob_str,for_year=None):
-    if for_year is None: for_year=get_local_today().year
+    if for_year is None: for_year=date.today().year
     y,m,d=map(int,dob_str.split('-'))
     return _reduce(_reduce(m)+_reduce(d)+_reduce(for_year))
 
 def get_personal_month(dob_str):
-    py=get_personal_year(dob_str); cm=get_local_today().month
+    py=get_personal_year(dob_str); cm=date.today().month
     return _reduce(py+_reduce(cm))
 
 def get_personal_day(dob_str):
-    pm=get_personal_month(dob_str); cd=get_local_today().day
+    pm=get_personal_month(dob_str); cd=date.today().day
     return _reduce(pm+_reduce(cd))
 
 def get_pinnacle_cycles(dob_str):
     y,m,d=map(int,dob_str.split('-'))
-    m_r = _reduce(m); d_r = _reduce(d); y_r = _reduce(y)
-    lp_base = _reduce(y_r + m_r + d_r)
-    
-    # Pinnacles (Addition)
-    p1 = _reduce(m_r + d_r); p2 = _reduce(d_r + y_r)
-    p3 = _reduce(p1 + p2); p4 = _reduce(m_r + y_r)
-    
-    # Challenges (Subtraction)
-    c1 = abs(m_r - d_r); c2 = abs(d_r - y_r)
-    c3 = abs(c1 - c2); c4 = abs(m_r - y_r)
-    
-    d1_end = 36 - (_reduce(lp_base, keep_master=False)) # Base Life path reduction for timing
-    d2_end = d1_end + 9; d3_end = d2_end + 9
-    
-    r1=(y, y+d1_end, p1, c1); r2=(y+d1_end, y+d2_end, p2, c2)
-    r3=(y+d2_end, y+d3_end, p3, c3); r4=(y+d3_end, y+100, p4, c4)
+    lp=get_personal_year(dob_str,for_year=y)
+    p1=_reduce(_reduce(m)+_reduce(d))
+    p2=_reduce(_reduce(d)+_reduce(y))
+    p3=_reduce(p1+p2)
+    p4=_reduce(_reduce(m)+_reduce(y))
+    d1_end=36-lp; d2_end=d1_end+9; d3_end=d2_end+9
+    birth_year=y
+    r1=(birth_year,birth_year+d1_end,p1); r2=(birth_year+d1_end,birth_year+d2_end,p2)
+    r3=(birth_year+d2_end,birth_year+d3_end,p3); r4=(birth_year+d3_end,birth_year+100,p4)
     return r1,r2,r3,r4
 
 def get_tarot_birth_card(dob_str):
@@ -1008,159 +999,192 @@ def build_numerology_prompt(name,dob_str,lp,dest,soul,pers,astro_dossier=None,us
     sys_name="Chaldean (Indian/Vedic)" if is_vedic else "Pythagorean (Western)"
     py=get_personal_year(dob_str); pm=get_personal_month(dob_str); pd=get_personal_day(dob_str)
     r1,r2,r3,r4=get_pinnacle_cycles(dob_str)
-    y,m,d=map(int,dob_str.split('-')); cur_age=get_local_today().year-y
+    y,m,d=map(int,dob_str.split('-')); cur_age=date.today().year-y
     def which_pinnacle():
-        for s,e,n,c in [r1,r2,r3,r4]:
-            if s<=y+cur_age<e: return s,e,n,c
+        for s,e,n in [r1,r2,r3,r4]:
+            if s<=y+cur_age<e: return s,e,n
         return r4
     curr_pinn=which_pinnacle()
-    
-    pdf_req = f"  {PDF_NUMEV}" if is_vedic else f"  {PDF_NUMEW1}\n  {PDF_NUMEW2}"
-    
-    prompt=f"""<context>
-<system_rules>
-MISSION: Master Numerologist — {sys_name} system.
-All rules, interpretations, and meanings MUST come strictly from:
-{pdf_req}
-Do NOT contradict these PDFs. 
-CRITICAL: The core numbers below are PRE-COMPUTED and LOCKED. DO NOT recalculate them.
-</system_rules>
-<user_data>
-Subject: {name.upper()} | DOB: {dob_str} | System: {sys_name}
-Life Path   : {lp}
-Destiny     : {dest}
-Soul Urge   : {soul}
-Personality : {pers}
-Personal Year (current): {py}
-Personal Month: {pm} | Personal Day: {pd}
-</user_data>
-<pinnacle_cycles>
-Pinnacle 1: Number {r1[2]} (Challenge: {r1[3]}) | Ages ~{r1[0]-y}–{r1[1]-y}
-Pinnacle 2: Number {r2[2]} (Challenge: {r2[3]}) | Ages ~{r2[0]-y}–{r2[1]-y}
-Pinnacle 3: Number {r3[2]} (Challenge: {r3[3]}) | Ages ~{r3[0]-y}–{r3[1]-y}
-Pinnacle 4: Number {r4[2]} (Challenge: {r4[3]}) | Ages ~{r4[0]-y} onwards
-Active Pinnacle Right Now: Pinnacle Number {curr_pinn[2]}, Challenge Number {curr_pinn[3]}
-</pinnacle_cycles>
-<task>"""
+    prompt=f"MISSION: Master Numerologist — {sys_name} system.\n\n"
+    prompt+=f"══ PRIMARY NUMEROLOGY KNOWLEDGE BASE (MANDATORY) ══\n"
+    if is_vedic:
+        prompt+=f"All rules, interpretations, and meanings MUST come from:\n  {PDF_NUMEV}\nDo NOT use Pythagorean logic here.\n\n"
+    else:
+        prompt+=f"All rules, interpretations, and meanings MUST come from:\n  {PDF_NUMEW1}\n  {PDF_NUMEW2}\nThese are your absolute references. Do NOT contradict them.\n\n"
+    prompt+=f"CRITICAL INSTRUCTION: The core numbers below are PRE-COMPUTED and LOCKED. DO NOT recalculate them from the name or date.\n\n"
+    prompt+=f"Subject: {name.upper()} | DOB: {dob_str} | System: {sys_name}\n\n"
+    prompt+="══ LOCKED CORE NUMBERS ══\n"
+    prompt+=f"Life Path   : {lp}{' ★ Master Number' if lp in [11,22,33] else ''} — {PERSONAL_YEAR_MEANINGS.get(lp,'')}\n"
+    prompt+=f"Destiny     : {dest}{' ★ Master Number' if dest in [11,22,33] else ''}\n"
+    prompt+=f"Soul Urge   : {soul}{' ★ Master Number' if soul in [11,22,33] else ''}\n"
+    prompt+=f"Personality : {pers}{' ★ Master Number' if pers in [11,22,33] else ''}\n\n"
+    prompt+="══ LOCKED TIMING NUMBERS ══\n"
+    prompt+=f"Personal Year  (current year {date.today().year}): {py} — {PERSONAL_YEAR_MEANINGS.get(py,'')}\n"
+    prompt+=f"Personal Month (this month): {pm}\n"
+    prompt+=f"Personal Day   (today {date.today()}): {pd}\n\n"
+    prompt+="══ PINNACLE CYCLES (locked) ══\n"
+    for i,(s,e,n) in enumerate([r1,r2,r3,r4],1):
+        active=" ◀ CURRENT" if (s,e,n)==curr_pinn else ""
+        prompt+=f"  Pinnacle {i}: Number {n} | Ages ~{s-y}–{e-y if e-y<100 else '∞'}{active}\n"
     if astro_dossier:
-        prompt+=f"\n══ ASTRO-NUMEROLOGY CROSS-REFERENCE ══\nAlso use: {PDF_HTRH1} and {PDF_HTRH2} for astrology.\nEXPLICIT SYNTHESIS REQUIRED:\n  - Life Path {lp} vs Lagna lord placement.\n  - Destiny {dest} vs Amatyakaraka.\n  - Soul Urge {soul} vs Moon sign.\nState explicitly where both systems AGREE and where they DIVERGE.\n</task>\n<astrology_dossier>\n{astro_dossier}\n</astrology_dossier>"
-    else: prompt+="\nDELIVER A COMPLETE REPORT:\n1. Life Path\n2. Destiny\n3. Soul Urge\n4. Personality\n5. Personal Year Forecast\n6. Active Pinnacle Cycle & the Challenge to overcome.\n</task>"
-    
-    if user_q: prompt+=f"\n<user_query>{user_q}</user_query>"
-    prompt += "\n</context>"
+        prompt+=f"\n══ ASTRO-NUMEROLOGY CROSS-REFERENCE ══\n"
+        prompt+=f"Also use: {PDF_HTRH1} and {PDF_HTRH2} for the astrological layer.\n"
+        prompt+=f"EXPLICIT SYNTHESIS REQUIRED:\n"
+        prompt+=f"  - Life Path {lp} vs Lagna lord placement: reinforce or contradict?\n"
+        prompt+=f"  - Destiny {dest} vs Amatyakaraka: career numbers aligned with chart?\n"
+        prompt+=f"  - Soul Urge {soul} vs Moon sign and nakshatra: inner drive matches emotional blueprint?\n"
+        prompt+=f"  - Personal Year {py} vs current Mahadasha: double-confirm or tension?\n"
+        prompt+=f"State explicitly where both systems AGREE (high confidence) and where they DIVERGE.\n\n"
+        prompt+=f"━━━ KUNDLI DOSSIER ━━━\n{astro_dossier}\n\n"
+    if user_q and user_q.strip():
+        prompt+=f"THE USER ASKS: \"{user_q}\"\nAnswer directly with evidence from both the numbers and (if provided) the chart."
+    else:
+        prompt+=("DELIVER A COMPLETE REPORT:\n1. Life Path — Core purpose and life journey\n"
+                 "2. Destiny — What they are meant to accomplish\n3. Soul Urge — Inner desires\n"
+                 "4. Personality — How the world sees them\n5. Personal Year {py} Forecast — What this year brings\n"
+                 "6. Active Pinnacle Cycle — Dominant life theme right now\n")
+        if astro_dossier: prompt+="7. Astro-Numerology Synthesis — Agreement and divergence between both systems\n"
     return prompt
 
 def build_numerology_compatibility_prompt(na,da,lpa,soula,dsta,nb,db,lpb,soulb,dstb,score,rating,notes,system):
     is_vedic=system=="Indian/Vedic (Chaldean)"
     pdf_ref=f"  {PDF_NUMEV}" if is_vedic else f"  {PDF_NUMEW1}\n  {PDF_NUMEW2}"
-    return f"""<context>
-<system_rules>
-MISSION: Numerology Compatibility Analysis — {system}.
-All rules MUST come from:\n{pdf_ref}\nPre-computed numbers are LOCKED. Do NOT recalculate.
-</system_rules>
-<user_data>
-PERSON 1: {na.upper()} (DOB: {da}) -> Life Path: {lpa} | Soul Urge: {soula} | Destiny: {dsta}
-PERSON 2: {nb.upper()} (DOB: {db}) -> Life Path: {lpb} | Soul Urge: {soulb} | Destiny: {dstb}
-SCORE: {score}/8 — {rating}
-Notes: {', '.join(notes)}
-</user_data>
-<task>
-DELIVER:
-1. Life Path compatibility and dynamic
-2. Soul Urge alignment
-3. Destiny compatibility
-4. Overall verdict & advice
-5. Potential strengths AND friction points
-6. Final Score out of 10
-</task>
-</context>"""
+    prompt=f"MISSION: Numerology Compatibility Analysis — {system}.\n\n"
+    prompt+=f"══ PRIMARY KNOWLEDGE BASE ══\nAll rules MUST come from:\n{pdf_ref}\n\n"
+    prompt+=f"CRITICAL: Pre-computed numbers below are LOCKED. Do NOT recalculate.\n\n"
+    prompt+=f"PERSON 1: {na.upper()} (DOB: {da})\n  Life Path: {lpa} | Soul Urge: {soula} | Destiny: {dsta}\n\n"
+    prompt+=f"PERSON 2: {nb.upper()} (DOB: {db})\n  Life Path: {lpb} | Soul Urge: {soulb} | Destiny: {dstb}\n\n"
+    prompt+=f"PRE-COMPUTED COMPATIBILITY SCORE: {score}/8 — {rating}\nKey observations:\n"
+    for note in notes: prompt+=f"  - {note}\n"
+    prompt+=("\n\nDELIVER:\n1. Life Path compatibility analysis and practical dynamic\n"
+             "2. Soul Urge alignment — do they want the same things?\n"
+             "3. Destiny compatibility — are their life missions complementary?\n"
+             "4. Overall compatibility verdict with practical relationship advice\n"
+             "5. Potential strengths AND friction points\n"
+             "6. Final Score out of 10 with explanation\n")
+    return prompt
 
 # ══════════════════════════════════════════════════════
 # TAROT PROMPT BUILDERS
 # ══════════════════════════════════════════════════════
-TAROT_MODES={"General Guidance":{"roles":["Situation / Past","Challenge / Present","Advice / Future"],"instruction":"General life overview — where they are, what blocks them, best path forward."},
- "Love & Dynamics":{"roles":["Your Energy","Their Energy","The Connection / Outcome"],"instruction":"Read through the lens of a relationship or emotional dynamic."},
- "Decision / Two Paths":{"roles":["Path A","Path B","Hidden Factor / Recommendation"],"instruction":"Contrast paths. Card 3 is the deciding weight or hidden truth."}}
+TAROT_MODES={"General Guidance":{"roles":["Situation / Past","Challenge / Present","Advice / Future"],
+    "instruction":"General life overview — where they are, what blocks them, best path forward."},
+ "Love & Dynamics":{"roles":["Your Energy","Their Energy","The Connection / Outcome"],
+    "instruction":"Read through the lens of a relationship or emotional dynamic."},
+ "Decision / Two Paths":{"roles":["Path A","Path B","Hidden Factor / Recommendation"],
+    "instruction":"Contrast paths. Card 3 is the deciding weight or hidden truth."}}
 
 def build_tarot_prompt(question,c1,s1,c2,s2,c3,s3,mode="General Guidance"):
     cfg=TAROT_MODES.get(mode,TAROT_MODES["General Guidance"]); r1,r2,r3=cfg["roles"]
-    return f"""<context>
-<system_rules>
-MISSION: Expert, intuitive Tarot Reader.
-All meanings and logic MUST come from: {PDF_TGUIDE}
-Trust your training from the PDF. Do not second-guess card meanings.
-</system_rules>
-<spread_data>
-Three-Card Spread ({mode}) — cryptographically randomised:
-  1. {r1}: {c1} ({s1})
-  2. {r2}: {c2} ({s2})
-  3. {r3}: {c3} ({s3})
-</spread_data>
-<task>
-Question: "{question}"
-Focus: {cfg['instruction']}
-RULES:
-1. SYNERGY: Analyse card-to-card interplay.
-2. REVERSED: Interpret its energy as blocked, internalised, or delayed.
-3. FORMAT: Overall Summary -> Card 1 -> Card 2 -> Card 3 -> Combined Message -> Action Step -> One-Line Takeaway.
-</task>
-</context>"""
+    return (f"MISSION: Expert, intuitive Tarot Reader.\n\n"
+            f"══ PRIMARY TAROT KNOWLEDGE BASE (MANDATORY) ══\n"
+            f"All card meanings, spreads, and interpretive logic MUST come from:\n  {PDF_TGUIDE}\n"
+            f"Do NOT use external knowledge that contradicts this guide.\n\n"
+            f"CRITICAL INSTRUCTION: Trust your training from the PDF. Do not second-guess card meanings.\n\n"
+            f"Question: \"{question}\"\n"
+            f"Three-Card Spread ({mode}) — cryptographically randomised:\n"
+            f"  1. {r1}: {c1} ({s1})\n  2. {r2}: {c2} ({s2})\n  3. {r3}: {c3} ({s3})\n\n"
+            f"Focus: {cfg['instruction']}\n\n"
+            f"INTERPRETATION RULES:\n"
+            f"1. SYNERGY: Analyse card-to-card interplay, elemental dignities, and Major Arcana weight.\n"
+            f"2. REVERSED CARDS: If a card is Reversed, interpret its energy as blocked, internalised, or delayed.\n"
+            f"3. TONE: Confident but not fatalistic. Use 'suggests', 'points to', 'leans toward'.\n"
+            f"4. FORMAT (follow exactly):\n"
+            f"   - Overall Summary (2-3 sentences)\n"
+            f"   - Card 1 ({r1}): [meaning in context]\n"
+            f"   - Card 2 ({r2}): [meaning in context]\n"
+            f"   - Card 3 ({r3}): [meaning in context]\n"
+            f"   - Combined Message\n   - Practical Action Step\n   - One-Line Takeaway\n")
 
 def build_yesno_prompt(question,card,state):
-    return f"""<context><system_rules>MISSION: Yes/No Oracle reading. Meanings MUST come from: {PDF_TGUIDE}</system_rules><task>Question: "{question}"\nCard Drawn: {card} ({state})\nRULES:\n- Upright = Yes; Reversed = No (nuance by card).\n- Major Arcana carry weight.\nDELIVER: Verdict (Yes/Likely Yes/Unclear/Likely No/No), Why, Condition, Takeaway.</task></context>"""
+    return (f"MISSION: Yes/No Oracle reading.\n\n"
+            f"══ PRIMARY KNOWLEDGE BASE ══\nMeanings MUST come from: {PDF_TGUIDE}\n\n"
+            f"Question: \"{question}\"\nCard Drawn: {card} ({state})\n\n"
+            f"YES/NO POLARITY RULES (from guide):\n"
+            f"- Upright cards generally lean Yes; Reversed lean No — but nuance by card type.\n"
+            f"- Major Arcana carry more weight than Minor.\n"
+            f"- Court cards indicate people/situations, not direct yes/no — factor in card narrative.\n\n"
+            f"DELIVER:\n1. Clear verdict: YES / LIKELY YES / UNCLEAR / LIKELY NO / NO\n"
+            f"2. Why — the card's specific energy in this context (2-3 sentences)\n"
+            f"3. Condition — what must happen (or be avoided) for the outcome to manifest\n"
+            f"4. One-Line Takeaway\n")
 
 def build_celtic_cross_prompt(question,cards,states):
     lines="\n".join(f"  {CELTIC_CROSS_POSITIONS[i]}: {cards[i]} ({states[i]})" for i in range(10))
-    return f"""<context>
-<system_rules>MISSION: Expert Celtic Cross Tarot reading. Interpretations MUST come from: {PDF_TGUIDE}</system_rules>
-<spread_data>\n10-Card Celtic Cross:\n{lines}\n</spread_data>
-<task>Question: "{question}"\nRULES:\n1. Core tension = Cards 1 & 2.\n2. Cards 3-6 = Context. Cards 7-10 = Staff.\n3. FORMAT: Core Message -> Position Reading -> Patterns -> Narrative -> Guidance -> Takeaway.</task>
-</context>"""
+    return (f"MISSION: Expert Celtic Cross Tarot reading.\n\n"
+            f"══ PRIMARY KNOWLEDGE BASE ══\nAll interpretations MUST come from: {PDF_TGUIDE}\n\n"
+            f"Question: \"{question}\"\n\n10-Card Celtic Cross — cryptographically randomised:\n{lines}\n\n"
+            f"INTERPRETATION RULES:\n"
+            f"1. The heart of the spread is cards 1 and 2 — establish this core tension first.\n"
+            f"2. Cards 3-6 are contextual (foundation, past, potential, near future).\n"
+            f"3. Cards 7-10 form the Staff — the internal/external journey and outcome.\n"
+            f"4. Look for patterns: suits clustering, Major Arcana count, recurring numbers.\n"
+            f"5. Reversed cards = blocked or internalised energy of that position.\n"
+            f"6. FORMAT (follow exactly):\n"
+            f"   - Core Message (Cards 1+2 tension in 2-3 sentences)\n"
+            f"   - Position-by-position reading (all 10 cards)\n"
+            f"   - Patterns & Themes observed across the spread\n"
+            f"   - Overall Narrative\n"
+            f"   - Practical Guidance\n"
+            f"   - Final One-Line Takeaway\n")
 
 def build_daily_tarot_prompt(card,state):
-    return f"""<context><system_rules>MISSION: Daily Guidance reading. Meanings MUST come from: {PDF_TGUIDE}</system_rules><task>Today's card: {card} ({state})\nDeliver: Meaning, Energy, Best action, Watch out for, One-Line Mantra.</task></context>"""
+    return (f"MISSION: Daily Guidance reading.\n\n"
+            f"══ PRIMARY KNOWLEDGE BASE ══\nMeanings MUST come from: {PDF_TGUIDE}\n\n"
+            f"Today's card: {card} ({state})\n\n"
+            f"Deliver a practical, insightful reading:\n"
+            f"- What this card means for today\n- The energy available\n"
+            f"- Best action to take\n- What to be mindful of\n- One-Line Mantra for Today\n")
 
 # ══════════════════════════════════════════════════════
 # HOROSCOPE TEXT (local, no AI)
 # ══════════════════════════════════════════════════════
 def generate_horoscope_text(sign,mode,date_val):
-    import random; rng=random.Random(f"{sign}_{mode}_{date_val}")
-    g=["The cosmos is aligning in your favor. Clarity arrives where there was confusion.","Patience is your best friend right now. Let things unfold naturally.","You are radiating positive energy — others are drawn to your presence.","A period of introspection is needed. Quiet reflection will yield insights.","Unexpected news might shift your perspective. Stay adaptable.","Your creative energy is at a peak. Channel it into something meaningful.","Rest is needed. Don't overcommit — your energy is precious.","A fantastic time to set new goals. The universe supports your ambitions."]
-    l=["Communication flows easily. Express your true feelings.","A slight misunderstanding is possible. Approach with empathy.","Romantic energy surrounds you. Plan something thoughtful.","Focus on self-love today. You deserve care and kindness.","A past connection may resurface. Proceed with an open but discerning heart."]
-    c=["Your hard work is catching the right attention. Recognition is near.","A challenge at work tests your patience. Stay calm, think strategically.","Collaboration is your superpower today. Reach out to a colleague.","A brilliant idea strikes. Write it down — timing is perfect.","Avoid impulsive financial decisions. Research before committing."]
+    import random
+    rng=random.Random(f"{sign}_{mode}_{date_val}")
+    g=["The cosmos is aligning in your favor. Clarity arrives where there was confusion.",
+       "Patience is your best friend right now. Let things unfold naturally.",
+       "You are radiating positive energy — others are drawn to your presence.",
+       "A period of introspection is needed. Quiet reflection will yield insights.",
+       "Unexpected news might shift your perspective. Stay adaptable.",
+       "Your creative energy is at a peak. Channel it into something meaningful.",
+       "Rest is needed. Don't overcommit — your energy is precious.",
+       "A fantastic time to set new goals. The universe supports your ambitions."]
+    l=["Communication flows easily. Express your true feelings.",
+       "A slight misunderstanding is possible. Approach with empathy.",
+       "Romantic energy surrounds you. Plan something thoughtful.",
+       "Focus on self-love today. You deserve care and kindness.",
+       "A past connection may resurface. Proceed with an open but discerning heart."]
+    c=["Your hard work is catching the right attention. Recognition is near.",
+       "A challenge at work tests your patience. Stay calm, think strategically.",
+       "Collaboration is your superpower today. Reach out to a colleague.",
+       "A brilliant idea strikes. Write it down — timing is perfect.",
+       "Avoid impulsive financial decisions. Research before committing."]
     return f"**General:** {rng.choice(g)}\n\n**Love & Relationships:** {rng.choice(l)}\n\n**Career & Finance:** {rng.choice(c)}"
 
 # ══════════════════════════════════════════════════════
-# CSS INJECTION (Polished Glass, Pulses, Overflows)
+# CSS
 # ══════════════════════════════════════════════════════
 def inject_css():
     st.markdown(textwrap.dedent("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap');
-    
-    /* Global Theming & Chrome Hiding */
-    [data-testid="stHeader"] {display: none !important;}
     html,body,.stApp{background:radial-gradient(circle at 15% 50%,#1a0f2e,#0c0814 60%,#050308 100%)!important;font-family:'Inter',sans-serif!important;color:#e2e0ec!important}
     #MainMenu,footer{visibility:hidden}
     h1,h2,h3,h4{font-family:'Space Grotesk',sans-serif!important;color:#fff}
     .block-container{padding:1rem 1.25rem 5rem!important;max-width:960px!important}
-    
-    /* Inputs & Containers */
     [data-testid="stVerticalBlockBorderWrapper"]{background:rgba(255,255,255,0.03)!important;backdrop-filter:blur(12px)!important;border:1px solid rgba(255,255,255,0.08)!important;border-radius:16px!important;box-shadow:0 8px 32px rgba(0,0,0,0.3)!important}
     .stTextInput>div>div>input,.stNumberInput>div>div>input,.stSelectbox>div>div,.stDateInput>div>div>input,.stTextArea>div>div>textarea{background:rgba(255,255,255,0.05)!important;border:1px solid rgba(255,255,255,0.12)!important;border-radius:10px!important;color:#eceaf4!important;font-family:'Inter',sans-serif!important}
-    
-    /* Buttons */
     div[data-testid="stButton"]>button{border-radius:10px!important;font-weight:600!important;transition:all 0.3s ease!important;border:1px solid rgba(255,255,255,0.1)!important;font-family:'Inter',sans-serif!important}
     div[data-testid="stButton"]>button[kind="primary"]{background:linear-gradient(135deg,rgba(144,98,222,0.85),rgba(205,140,80,0.85))!important;border:none!important;color:#fff!important}
     div[data-testid="stButton"]>button[kind="primary"]:hover{transform:translateY(-2px)!important;box-shadow:0 8px 20px rgba(144,98,222,0.4)!important}
     div[data-testid="stButton"]>button:not([kind="primary"]){background:rgba(255,255,255,0.05)!important;color:#e2e0ec!important}
     div[data-testid="stButton"]>button:not([kind="primary"]):hover{background:rgba(255,255,255,0.1)!important;color:#fff!important}
-    
-    /* Code block container restrictions */
+    .stLinkButton>a{background:rgba(255,255,255,0.05)!important;border:1px solid rgba(255,255,255,0.1)!important;border-radius:10px!important;color:#fff!important;transition:all 0.3s!important}
+    .stLinkButton>a:hover{background:rgba(255,255,255,0.1)!important}
     [data-testid="stExpander"]{border:1px solid rgba(255,255,255,0.1)!important;border-radius:12px!important;background:rgba(0,0,0,0.2)!important}
     .stCodeBlock{border-radius:12px!important;border:1px solid rgba(255,255,255,0.1)!important}
-    
-    /* ── BOTTOM NAV (mobile only) ── */
+    /* ── BOTTOM NAV (mobile, dashboard only) ── */
     .bot-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;background:rgba(10,6,22,0.95);backdrop-filter:blur(20px);border-top:1px solid rgba(144,98,222,0.3);padding:8px 0 env(safe-area-inset-bottom,8px)}
     .bot-nav-inner{display:flex;justify-content:space-around;align-items:center;max-width:600px;margin:0 auto}
     .bnav-item{display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 10px;border-radius:10px;cursor:pointer;border:none;background:transparent;color:rgba(200,195,220,0.55);font-family:'Inter',sans-serif;font-size:10px;font-weight:500;transition:all 0.2s;min-width:56px}
@@ -1168,26 +1192,25 @@ def inject_css():
     .bnav-item:hover{color:#e0d0f5;background:rgba(144,98,222,0.15)}
     .bnav-icon{font-size:20px;line-height:1}
     @media(max-width:768px){.bot-nav{display:block}}
-    
     /* ── SIDEBAR improvements ── */
     [data-testid="stSidebar"]{background:rgba(8,4,20,0.97)!important;border-right:1px solid rgba(144,98,222,0.2)!important}
     [data-testid="stSidebar"] [data-testid="stButton"]>button{text-align:left!important;justify-content:flex-start!important;padding:10px 16px!important}
-    
-    /* ── Feature cards ── */
+    /* ── Feature cards (dashboard) ── */
     .feat-card{border-radius:14px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.04);padding:1.2rem;transition:all 0.2s;position:relative;overflow:hidden}
     .feat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--c)}
     .feat-card:hover{border-color:rgba(255,255,255,0.15);transform:translateY(-2px)}
     .feat-icon{font-size:1.8rem;display:block;margin-bottom:.5rem}
     .feat-title{font-family:'Space Grotesk',sans-serif;font-size:.95rem;font-weight:600;color:#fff;margin:0 0 .3rem}
     .feat-desc{font-size:.78rem;color:rgba(190,185,210,0.6);margin:0;line-height:1.55}
-    
-    /* ── Default badge Pulse ── */
-    @keyframes pulse { 0% { opacity: 0.8; box-shadow: 0 0 0 0 rgba(205,140,80,0.4); } 70% { opacity: 1; box-shadow: 0 0 0 4px rgba(205,140,80,0); } 100% { opacity: 0.8; } }
-    .default-badge{background:rgba(205,140,80,0.2);border:1px solid rgba(205,140,80,0.4);color:#d4944a;font-size:.7rem;padding:1px 8px;border-radius:10px;font-weight:600; animation: pulse 2s infinite;}
-    
+    .pill{display:inline-block;font-size:.7rem;font-weight:600;padding:2px 8px;border-radius:20px;margin-bottom:.5rem;letter-spacing:.5px}
+    /* ── Profile card ── */
     .prof-banner{background:linear-gradient(135deg,rgba(144,98,222,0.2),rgba(205,140,80,0.1));border:1px solid rgba(144,98,222,0.3);border-radius:14px;padding:1.2rem 1.5rem;margin-bottom:1.5rem}
+    /* ── Stat boxes ── */
+    .stat-box{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:1rem;text-align:center}
     .stat-val{font-family:'Space Grotesk',sans-serif;font-size:1.4rem;font-weight:700;color:#fff}
     .stat-lbl{font-size:.72rem;color:rgba(190,185,210,0.55);margin-top:2px}
+    /* ── Default badge ── */
+    .default-badge{background:rgba(205,140,80,0.2);border:1px solid rgba(205,140,80,0.4);color:#d4944a;font-size:.7rem;padding:1px 8px;border-radius:10px;font-weight:600}
     </style>
     """),unsafe_allow_html=True)
 
@@ -1225,10 +1248,11 @@ def render_post_generation(prompt):
     with st.expander("📄 View Raw Prompt",expanded=False): st.code(prompt,language="text")
 
 # ══════════════════════════════════════════════════════
-# BOTTOM NAV
+# BOTTOM NAV (Dashboard only, mobile)
 # ══════════════════════════════════════════════════════
 def render_bottom_nav():
-    items=[("🌌","Home","Dashboard"),("🔮","Oracle","The Oracle"),("🃏","Cards","Mystic Tarot"),("🔢","Numbers","Numerology"),("👤","Profiles","Saved Profiles")]
+    items=[("🌌","Home","Dashboard"),("🔮","Oracle","The Oracle"),
+           ("🃏","Cards","Mystic Tarot"),("🔢","Numbers","Numerology"),("👤","Profiles","Saved Profiles")]
     html='<div class="bot-nav"><div class="bot-nav-inner">'
     for icon,label,page in items:
         active="active" if st.session_state.nav_page==page else ""
@@ -1243,8 +1267,16 @@ def render_bottom_nav():
     }
     </script>""",height=0,width=0)
 
+def auto_close_sidebar():
+    components.html("""<script>
+    setTimeout(function(){
+        var btns=window.parent.document.querySelectorAll('button[aria-label="Collapse sidebar"]');
+        if(btns.length>0)btns[0].click();
+    },100);
+    </script>""",height=0,width=0)
+
 # ══════════════════════════════════════════════════════
-# TAROT OVERLAY (FIXED & SCALED)
+# TAROT OVERLAY
 # ══════════════════════════════════════════════════════
 def get_filename(n): return n.lower().replace(' ','')+'.jpg'
 BASE_URL="https://raw.githubusercontent.com/hinshalll/text2kprompt/main/tarot/"
@@ -1252,46 +1284,35 @@ def render_tarot_overlay(cards,states,num=3):
     urls=[f"{BASE_URL}{get_filename(c)}" for c in cards]
     card_back=f"{BASE_URL}tarotrear.png"
     cards_html="".join(f'<div class="t-card-wrapper w{i+1}"><div class="t-card-inner i{i+1}"><div class="t-card-back"></div><div class="t-card-front f{i+1}" style="background-image:url(\'{urls[i]}\');{"transform:rotate(180deg);" if states[i]=="Reversed" else ""}"></div></div></div>' for i in range(num))
-    
     st.markdown(f"""
     <style>
     .tarot-stage{{position:relative;width:100%;max-width:600px;margin:0 auto 1.5rem;border-radius:16px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.6);background:linear-gradient(45deg,#1a0f2e,#0c0814)}}
     .vid-d,.vid-m{{width:100%;display:block;object-fit:cover;opacity:.8}}
     .vid-d{{aspect-ratio:1440/1678}}.vid-m{{display:none;aspect-ratio:24/41}}
-    .card-container{{position:absolute;bottom:2%;width:100%;display:flex;justify-content:center;perspective:1000px;flex-wrap:wrap;padding:0 5%;}}
+    .card-container{{position:absolute;bottom:8%;width:100%;display:flex;justify-content:center;gap:3%;perspective:1000px}}
+    .t-card-wrapper{{width:{'22%' if num==10 else '25%'};aspect-ratio:2/3;opacity:0}}
     .t-card-inner{{width:100%;height:100%;position:relative;transform-style:preserve-3d;transform:rotateY(0deg)}}
     .t-card-front,.t-card-back{{position:absolute;width:100%;height:100%;backface-visibility:hidden;border-radius:8px;box-shadow:0 5px 20px rgba(0,0,0,.8);background-size:cover;background-position:center}}
     .t-card-back{{background-image:url('{card_back}');border:2px solid rgba(205,140,80,.5)}}
     .t-card-front{{transform:rotateY(180deg);border:2px solid rgba(205,140,80,.8)}}
-    .scroll-prompt{{position:absolute;bottom:0.5%;width:100%;text-align:center;color:#fff;font-size:0.85rem;font-weight:600;opacity:0;text-shadow:0 2px 5px rgba(0,0,0,0.8);letter-spacing:1px;font-family:'Space Grotesk',sans-serif;}}
-    
-    /* Layout Logic */
-    .num-10 .t-card-wrapper {{ width: 15%; margin: 0 1.5% 2% 1.5%; aspect-ratio: 2/3; opacity: 0; }} /* 5 per row */
-    .num-3 .t-card-wrapper {{ width: 28%; margin: 0 2%; aspect-ratio: 2/3; opacity: 0; }}
-    .num-1 .t-card-wrapper {{ width: 32%; aspect-ratio: 2/3; opacity: 0; }}
-    
-    @media(max-width:768px){{.vid-d{{display:none}}.vid-m{{display:block}}.num-10 .t-card-wrapper{{width:16%; margin: 0 1% 2% 1%;}}.num-3 .t-card-wrapper{{width:28%;margin: 0 1%;}}}}
+    @media(max-width:768px){{.vid-d{{display:none}}.vid-m{{display:block}}.t-card-wrapper{{width:{'28%' if num<=3 else '18%'}}}}}
     </style>
     <div class="tarot-stage">
         <video class="vid-d" autoplay loop muted playsinline><source src="{BASE_URL}tarotvid.mp4" type="video/mp4"></video>
         <video class="vid-m" autoplay loop muted playsinline><source src="{BASE_URL}tarotvideo.mp4" type="video/mp4"></video>
-        <div class="card-container num-{num}">{cards_html}</div>
-        <div class="scroll-prompt sp">✨ The cards have spoken. Scroll down for your reading. ✨</div>
+        <div class="card-container">{cards_html}</div>
     </div>""",unsafe_allow_html=True)
-    
-    flip_js="".join(f'gsap.to(doc.querySelector(".i{i+1}"),{{rotationY:180,duration:.8,delay:{1.2+i*0.2},ease:"back.out(1.7)"}}); ' for i in range(num))
+    flip_js="".join(f'gsap.to(doc.querySelector(".i{i+1}"),{{rotationY:180,duration:.8,delay:{1.2+i*0.4},ease:"back.out(1.7)"}}); ' for i in range(num))
     components.html(f"""<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
     <script>setTimeout(function(){{var doc=window.parent.document;
-    gsap.to(doc.querySelectorAll({','.join([f'".w{i+1}"' for i in range(num)])}),{{y:0,opacity:1,duration:1,stagger:.2,ease:"power3.out",onStart:function(){{gsap.set(this.targets(),{{y:50}})}}}});
-    {flip_js}
-    gsap.to(doc.querySelector('.sp'), {{opacity:1, duration:1, delay:{1.5 + num*0.2}}});
-    gsap.delayedCall({2.0 + num*0.2}, function() {{ window.parent.scrollBy({{top: 500, behavior: 'smooth'}}); }});
-    }},150);</script>""",height=0,width=0)
+    gsap.to(doc.querySelectorAll({','.join([f'".w{i+1}"' for i in range(num)])}),{{y:0,opacity:1,duration:1,stagger:.3,ease:"power3.out",onStart:function(){{gsap.set(this.targets(),{{y:50}})}}}});
+    {flip_js}}},150);</script>""",height=0,width=0)
 
 # ══════════════════════════════════════════════════════
 # PROFILE FORM HELPERS
 # ══════════════════════════════════════════════════════
 def sorted_profile_options():
+    """Returns list of profile dicts with default first."""
     if not st.session_state.db: return []
     def_idx=st.session_state.default_profile_idx
     result=[]
@@ -1303,7 +1324,8 @@ def sorted_profile_options():
     return result
 
 def render_profile_form(key_prefix,show_d60=True):
-    if st.session_state.db: method=st.radio("Source",["Enter New Details","Saved Profile"],horizontal=True,key=f"rad_{key_prefix}",label_visibility="collapsed")
+    if st.session_state.db:
+        method=st.radio("Source",["Enter New Details","Saved Profile"],horizontal=True,key=f"rad_{key_prefix}",label_visibility="collapsed")
     else: method="Enter New Details"
     with st.container(border=True):
         if method=="Enter New Details":
@@ -1380,7 +1402,7 @@ def render_sidebar():
         for label,page in pages:
             kind="primary" if st.session_state.nav_page==page else "secondary"
             if st.button(label,use_container_width=True,type=kind,key=f"side_{page}"):
-                st.session_state.nav_page=page; st.rerun()
+                st.session_state.nav_page=page; auto_close_sidebar(); st.rerun()
         st.markdown("---")
         dp=get_default_profile()
         if dp:
@@ -1405,6 +1427,7 @@ def show_dashboard():
     with st.spinner("Loading cosmic weather..."):
         cw=get_live_cosmic_weather()
 
+    # ── Cosmic Weather Row ──
     st.markdown("### 🌍 Today's Cosmic Weather")
     cw1,cw2,cw3=st.columns(3)
     with cw1:
@@ -1433,12 +1456,13 @@ def show_dashboard():
             for r in cw['retrogrades']:
                 if r in tips: st.caption(f"**{r}:** {tips[r]}")
 
+    # ── Personal Trackers (default profile) ──
     if dp:
         st.markdown("### ⏳ Your Live Planetary Snapshot")
         try:
             d_val=date.fromisoformat(dp['date']); t_val=datetime.strptime(dp['time'],"%H:%M").time()
             jd,dt_local,_=local_to_julian_day(d_val,t_val,dp['tz'])
-            moon_lon,_,_=get_planet_metrics(jd,PLANETS["Moon"])
+            moon_lon,_=get_planet_longitude_and_speed(jd,PLANETS["Moon"])
             dt_now=datetime.now(ZoneInfo(dp['tz']))
             dasha_info=build_vimshottari_timeline(dt_local,moon_lon,dt_now)
             sade_sati=calculate_sade_sati(sign_index_from_lon(moon_lon))
@@ -1459,7 +1483,7 @@ def show_dashboard():
                 with st.container(border=True):
                     st.markdown("#### 🪐 Sade Sati")
                     if "ACTIVE" in sade_sati:
-                        st.warning(sade_sati.split(':')[0])
+                        st.warning(sade_sati.split('.')[0])
                         st.caption("Saturn's 7.5-year transit over your Moon — brings pressure and transformation.")
                     else:
                         st.success("Not Active")
@@ -1468,10 +1492,24 @@ def show_dashboard():
     else:
         st.markdown("### ⏳ Personal Tracker")
         st.info("Set a default profile to see your live Dasha, Antardasha, and Sade Sati here automatically.")
+        if st.session_state.db:
+            opts=["— Select Profile —"]+[p['name'] for p in st.session_state.db]
+            sel=st.selectbox("Quick view:",opts,key="dash_quick_sel")
+            if sel!="— Select Profile —":
+                prof=next(p for p in st.session_state.db if p['name']==sel)
+                try:
+                    d_val=date.fromisoformat(prof['date']); t_val=datetime.strptime(prof['time'],"%H:%M").time()
+                    jd,dt_local,_=local_to_julian_day(d_val,t_val,prof['tz'])
+                    moon_lon,_=get_planet_longitude_and_speed(jd,PLANETS["Moon"])
+                    dt_now=datetime.now(ZoneInfo(prof['tz']))
+                    dasha_info=build_vimshottari_timeline(dt_local,moon_lon,dt_now)
+                    st.write(f"**{dasha_info['current_md']} Mahadasha** → {dasha_info['current_ad']} Antardasha (until {dasha_info['ad_end'].strftime('%b %Y')})")
+                except: pass
 
+    # ── Daily Tarot ──
     st.markdown("### 🃏 Daily Tarot Card")
     with st.container(border=True):
-        today_str=get_local_today(dp['tz'] if dp else "Asia/Kolkata").isoformat()
+        today_str=date.today().isoformat()
         already_drawn=st.session_state.dash_tarot_date==today_str and st.session_state.dash_tarot_card
         dt1,dt2=st.columns([1,2])
         with dt1:
@@ -1499,12 +1537,13 @@ def show_dashboard():
                 a1.link_button("💬 ChatGPT","https://chatgpt.com/",use_container_width=True)
                 a2.link_button("✨ Gemini","https://gemini.google.com/",use_container_width=True)
 
+    # ── Feature Cards for new users ──
     st.markdown("### 🚀 What would you like to do?")
     feats=[("🔮","linear-gradient(90deg,#4e28a0,#8050cc)","Full Life Reading","Deep life analysis — personality, career, wealth, marriage, timing. Paste one prompt into any AI.","The Oracle"),
-           ("🪐","linear-gradient(90deg,#8e2050,#c85080)","Live Transit Overlay","See how today's transits trigger your natal chart events right now.","The Oracle"),
+           ("✦","linear-gradient(90deg,#8e2050,#c85080)","Compatibility Check","Complete Ashta Koota scoring, Manglik verdict, and KP marriage analysis for two charts.","The Oracle"),
            ("🃏","linear-gradient(90deg,#185578,#2888b8)","3-Card Tarot Spread","Ask a question, draw three cards, get a full reading prompt for any AI.","Mystic Tarot"),
            ("🔢","linear-gradient(90deg,#1a6040,#28a870)","Numerology Report","Core numbers, Personal Year, Pinnacle cycles, and optional astro cross-reference.","Numerology"),
-           ("✦","linear-gradient(90deg,#8e2050,#c85080)","Compatibility Check","Complete Ashta Koota scoring, Manglik verdict, and KP marriage analysis for two charts.","The Oracle"),
+           ("🎯","linear-gradient(90deg,#6a3000,#c07020)","Ask a Question (Prashna)","Cast a horary chart for right now and get a Yes/No/Delayed answer to any specific question.","The Oracle"),
            ("⚖","linear-gradient(90deg,#185578,#2888b8)","Compare Charts","Rank multiple people on wealth, luck, health, and custom parameters with planetary evidence.","The Oracle")]
     r1,r2=st.columns(2); r3,r4=st.columns(2); r5,r6=st.columns(2)
     cols_feat=[r1,r2,r3,r4,r5,r6]
@@ -1517,7 +1556,7 @@ def show_dashboard():
             if st.button(f"Open →",key=f"feat_{i}",use_container_width=True):
                 if target=="The Oracle":
                     mission_map={"Full Life Reading":"Deep Personal Analysis","Compatibility Check":"Matchmaking / Compatibility",
-                                 "Live Transit Overlay":"Live Transit vs Natal","Compare Charts":"Comparison (Multiple Profiles)"}
+                                 "Ask a Question (Prashna)":"Prashna Kundli","Compare Charts":"Comparison (Multiple Profiles)"}
                     st.session_state.active_mission=mission_map.get(title,"Deep Personal Analysis")
                 st.session_state.nav_page=target; st.rerun()
 
@@ -1527,16 +1566,13 @@ def show_dashboard():
 # ORACLE
 # ══════════════════════════════════════════════════════
 def show_oracle():
+    auto_close_sidebar()
     st.markdown("<h1>🔮 The Oracle</h1>",unsafe_allow_html=True)
     st.markdown("<p style='color:rgba(255,255,255,.6);'>Mathematically locked AI prompts from Swiss Ephemeris precision.</p>",unsafe_allow_html=True)
-    missions={"Deep Personal Analysis":"🔮 Full Life Reading", "Live Transit vs Natal": "🪐 Live Transit Overlay", "Matchmaking / Compatibility":"✦ Compatibility Match",
+    missions={"Deep Personal Analysis":"🔮 Full Life Reading","Matchmaking / Compatibility":"✦ Compatibility Match",
               "Comparison (Multiple Profiles)":"⚖ Compare Profiles","Prashna Kundli":"🎯 Ask a Question (Prashna)","Raw Data Only":"📋 Raw Chart Data"}
-    descs={"Deep Personal Analysis":"Complete reading — personality, career, wealth, marriage, timing.",
-           "Live Transit vs Natal": "How today's planetary transits are activating your natal chart.",
-           "Matchmaking / Compatibility":"Full Ashta Koota + Manglik + KP marriage promise.",
-           "Comparison (Multiple Profiles)":"Rank multiple people on custom traits with planetary evidence.",
-           "Prashna Kundli":"Ask a specific question now. Get Yes/No/Delayed.",
-           "Raw Data Only":"Your full chart data. Paste into any AI and ask anything."}
+    descs={"Deep Personal Analysis":"Complete reading — personality, career, wealth, marriage, timing.","Matchmaking / Compatibility":"Full Ashta Koota + Manglik + KP marriage promise.",
+           "Comparison (Multiple Profiles)":"Rank multiple people on custom traits with planetary evidence.","Prashna Kundli":"Ask a specific question now. Get Yes/No/Delayed.","Raw Data Only":"Your full chart data. Paste into any AI and ask anything."}
     sel_name=st.selectbox("Select Tool",list(missions.values()),label_visibility="collapsed",key="oracle_tool_sel")
     mission_id=list(missions.keys())[list(missions.values()).index(sel_name)]
     if st.session_state.active_mission!=mission_id: st.session_state.active_mission=mission_id
@@ -1574,8 +1610,7 @@ def run_oracle_mission(mission):
                 dos=generate_astrology_dossier(prof)
             render_post_generation(build_prashna_prompt(question,dos))
         return
-        
-    req=1 if mission in ["Raw Data Only","Deep Personal Analysis", "Live Transit vs Natal"] else 2
+    req=1 if mission in ["Raw Data Only","Deep Personal Analysis"] else 2
     num_slots=st.session_state.comp_slots if mission=="Comparison (Multiple Profiles)" else req
     st.markdown("#### Profile Selection")
     active=[]
@@ -1593,7 +1628,6 @@ def run_oracle_mission(mission):
             with cols[i%2]:
                 st.markdown(f"**{'Person '+str(i+1) if num_slots>1 else 'Your Details'}**")
                 active.append(render_profile_form(f"orc_{mission}_{i}"))
-                
     selected_criteria=[]
     if mission=="Comparison (Multiple Profiles)":
         st.markdown("### What to Compare")
@@ -1611,9 +1645,7 @@ def run_oracle_mission(mission):
             r1x,r2x=st.columns([6,1])
             if r1x.checkbox(c,key=f"cc_{i}"): selected_criteria.append(c)
             if r2x.button("✕",key=f"delc_{i}"): st.session_state.custom_criteria.pop(i); st.rerun()
-            
-    btn_labels={"Raw Data Only":"Generate Chart Data","Deep Personal Analysis":"Generate Full Reading Prompt", "Live Transit vs Natal": "Generate Overlay Prompt", "Matchmaking / Compatibility":"Generate Compatibility Prompt","Comparison (Multiple Profiles)":"Generate Comparison Prompt"}
-    
+    btn_labels={"Raw Data Only":"Generate Chart Data","Deep Personal Analysis":"Generate Full Reading Prompt","Matchmaking / Compatibility":"Generate Compatibility Prompt","Comparison (Multiple Profiles)":"Generate Comparison Prompt"}
     if st.button(btn_labels[mission],type="primary",use_container_width=True,key=f"gen_{mission}"):
         profiles=[]; d60s=[]
         for item in active:
@@ -1623,23 +1655,20 @@ def run_oracle_mission(mission):
         compact=mission=="Comparison (Multiple Profiles)" and len(profiles)>3
         with st.spinner("Consulting the ephemeris..."):
             if mission=="Raw Data Only":
-                final_prompt=(f"<context>\n<system_rules>\nThis is a complete, pre-computed Vedic birth chart. All values are locked.\n"
-                              f"Rules MUST come from:\n  {PDF_HTRH1}\n  {PDF_HTRH2}\n</system_rules>\n<user_chart_data>\n"
-                              +generate_astrology_dossier(profiles[0],d60s[0])+"\n</user_chart_data>\n</context>")
+                final_prompt=(f"This is a complete, pre-computed Vedic birth chart. All values are locked.\n\n"
+                              f"══ PRIMARY KNOWLEDGE BASE ══\nRules MUST come from:\n  {PDF_HTRH1}\n  {PDF_HTRH2}\n\n"
+                              +generate_astrology_dossier(profiles[0],d60s[0]))
             elif mission=="Deep Personal Analysis":
                 final_prompt=build_deep_analysis_prompt(generate_astrology_dossier(profiles[0],d60s[0]))
-            elif mission=="Live Transit vs Natal":
-                cw = get_live_cosmic_weather()
-                final_prompt=build_transit_prompt(generate_astrology_dossier(profiles[0],d60s[0]), cw)
             elif mission=="Matchmaking / Compatibility":
                 ma=get_moon_lon_from_profile(profiles[0]); mb=get_moon_lon_from_profile(profiles[1])
                 koota=calculate_ashta_koota(ma,mb)
                 jda,dtla,_=local_to_julian_day(date.fromisoformat(profiles[0]['date']),datetime.strptime(profiles[0]['time'],"%H:%M").time(),profiles[0]['tz'])
-                pla={pn:get_planet_metrics(jda,pid) for pn,pid in PLANETS.items()}
+                pla={pn:get_planet_longitude_and_speed(jda,pid) for pn,pid in PLANETS.items()}
                 laga=sign_index_from_lon(get_lagna_and_cusps(jda,profiles[0]['lat'],profiles[0]['lon'])[0])
                 ma_d=check_manglik_dosha(laga,sign_index_from_lon(pla["Moon"][0]),sign_index_from_lon(pla["Mars"][0]))
                 jdb,dtlb,_=local_to_julian_day(date.fromisoformat(profiles[1]['date']),datetime.strptime(profiles[1]['time'],"%H:%M").time(),profiles[1]['tz'])
-                plb={pn:get_planet_metrics(jdb,pid) for pn,pid in PLANETS.items()}
+                plb={pn:get_planet_longitude_and_speed(jdb,pid) for pn,pid in PLANETS.items()}
                 lagb=sign_index_from_lon(get_lagna_and_cusps(jdb,profiles[1]['lat'],profiles[1]['lon'])[0])
                 mb_d=check_manglik_dosha(lagb,sign_index_from_lon(plb["Moon"][0]),sign_index_from_lon(plb["Mars"][0]))
                 canc=get_manglik_cancellation_verdict(ma_d,mb_d)
@@ -1654,6 +1683,7 @@ def run_oracle_mission(mission):
 # TAROT
 # ══════════════════════════════════════════════════════
 def show_tarot():
+    auto_close_sidebar()
     st.markdown("<h1>🃏 Mystic Tarot</h1>",unsafe_allow_html=True)
     tab1,tab2,tab3,tab4=st.tabs(["✦ Three-Card Spread","☯ Yes / No Oracle","🔮 Celtic Cross (10 Cards)","🌟 Birth Card"])
 
@@ -1704,7 +1734,7 @@ def show_tarot():
             st.session_state.cc_drawn=True
         if st.session_state.get('cc_drawn') and st.session_state.get('cc_cards'):
             cards=st.session_state.cc_cards; states=st.session_state.cc_states
-            render_tarot_overlay(cards,states,10)
+            render_tarot_overlay(cards[:6],states[:6],6)
             for i,(c,s) in enumerate(zip(cards,states)):
                 st.markdown(f"**{CELTIC_CROSS_POSITIONS[i]}:** {c} ({s})")
             prompt=build_celtic_cross_prompt(cc_q or "General life overview",cards,states); render_post_generation(prompt)
@@ -1721,18 +1751,23 @@ def show_tarot():
             <img src='{img_url}' style='width:160px;border-radius:10px;border:2px solid rgba(205,140,80,.8);box-shadow:0 4px 20px rgba(0,0,0,.5);'>
             <h3 style='margin:.8rem 0 .2rem;'>{card}</h3>
             <p style='color:rgba(200,190,220,.6);font-size:.82rem;'>Your Tarot Birth Card</p></div>""",unsafe_allow_html=True)
-            prompt=f"""<context><system_rules>MISSION: Tarot Birth Card reading. Meanings MUST come from: {PDF_TGUIDE}</system_rules><task>Name's DOB: {bc_dob.isoformat()}\nBirth Card: {card}\nDeliver: Archetype meaning, life theme, core strengths, shadows/challenges, famous figures, personal mantra.</task></context>"""
+            prompt=(f"MISSION: Tarot Birth Card reading.\n\n"
+                    f"══ PRIMARY KNOWLEDGE BASE ══\nMeanings MUST come from: {PDF_TGUIDE}\n\n"
+                    f"Name's DOB: {bc_dob.isoformat()}\nBirth Card: {card}\n\n"
+                    f"Deliver a deep, soulful reading:\n1. This card's archetypal meaning and symbolism\n"
+                    f"2. How this archetype manifests as a life theme\n"
+                    f"3. Core strengths this energy brings\n4. Core challenges or shadow this energy carries\n"
+                    f"5. Famous people or figures who embody this archetype\n6. A personal mantra for this birth card\n")
             render_post_generation(prompt)
 
 # ══════════════════════════════════════════════════════
 # HOROSCOPES
 # ══════════════════════════════════════════════════════
 def show_horoscopes():
+    auto_close_sidebar()
     st.markdown("<h1>🌟 Horoscopes</h1>",unsafe_allow_html=True)
     st.info("ℹ️ These horoscopes are algorithmically generated from traditional sign-based guidance — not computed from your personal birth chart. For a chart-accurate, personalised reading, use **The Oracle**.")
-    dp=get_default_profile()
-    today=get_local_today(dp['tz'] if dp else "Asia/Kolkata")
-    
+    today=date.today()
     t1,t2=st.tabs(["☀️ Western (Sun Sign)","🌙 Vedic (Moon Sign / Rashi)"])
     with t1:
         dob=st.date_input("Date of Birth",date(2000,1,1),key="h_w_dob")
@@ -1761,6 +1796,7 @@ def show_horoscopes():
 # NUMEROLOGY
 # ══════════════════════════════════════════════════════
 def show_numerology():
+    auto_close_sidebar()
     st.markdown("<h1>🔢 Numerology</h1>",unsafe_allow_html=True)
     tab1,tab2,tab3=st.tabs(["📊 Full Report","🤝 Compatibility","⭕ Personal Cycles"])
 
@@ -1796,14 +1832,14 @@ def show_numerology():
             c3.metric("Soul Urge",f"{soul}{'★' if soul in [11,22,33] else ''}")
             c4.metric("Personality",f"{pers}{'★' if pers in [11,22,33] else ''}")
             pc1,pc2,pc3=st.columns(3)
-            pc1.metric(f"Personal Year {get_local_today().year}",str(py))
+            pc1.metric(f"Personal Year {date.today().year}",str(py))
             pc2.metric(f"Personal Month",str(pm)); pc3.metric("Personal Day",str(pd))
             if any(n in [11,22,33] for n in [lp,dest,soul,pers]): st.caption("★ = Master Number")
             prompt=build_numerology_prompt(name,dob_str,lp,dest,soul,pers,dossier,question,system)
             render_post_generation(prompt)
 
     with tab2:
-        st.markdown("#### Numerology Compatibility")
+        st.markdown("#### Numerology Compatibility Between Two People")
         sys2=st.radio("System",["Western (Pythagorean)","Indian/Vedic (Chaldean)"],horizontal=True,key="nc_sys")
         c1,c2=st.columns(2)
         with c1:
@@ -1823,7 +1859,7 @@ def show_numerology():
 
     with tab3:
         st.markdown("#### Personal Cycles & Pinnacles")
-        st.caption("Understand the numerical timing and specific challenges of your life phases.")
+        st.caption("Understand the numerical timing of your life phases.")
         sys3=st.radio("System",["Western (Pythagorean)","Indian/Vedic (Chaldean)"],horizontal=True,key="cyc_sys")
         c1,c2=st.columns(2)
         with c1: cyc_name=st.text_input("Full Birth Name",key="cyc_name")
@@ -1835,38 +1871,32 @@ def show_numerology():
             r1,r2,r3,r4=get_pinnacle_cycles(cyc_dob.isoformat()); y=cyc_dob.year
             st.markdown("#### Current Timing")
             c1,c2,c3=st.columns(3)
-            c1.metric(f"Personal Year {get_local_today().year}",str(py)); c1.caption(PERSONAL_YEAR_MEANINGS.get(py,''))
+            c1.metric(f"Personal Year {date.today().year}",str(py)); c1.caption(PERSONAL_YEAR_MEANINGS.get(py,''))
             c2.metric("Personal Month",str(pm)); c3.metric("Personal Day",str(pd))
-            st.markdown("#### Pinnacle Cycles & Challenges")
-            cur_age=get_local_today().year-y
-            for i,(s,e,n,c) in enumerate([r1,r2,r3,r4],1):
+            st.markdown("#### Pinnacle Cycles")
+            cur_age=date.today().year-y
+            for i,(s,e,n) in enumerate([r1,r2,r3,r4],1):
                 is_curr=s-y<=cur_age<e-y
                 border="border:1px solid rgba(205,140,80,.5);" if is_curr else "border:1px solid rgba(255,255,255,.07);"
                 label="◀ CURRENT" if is_curr else ""
-                st.markdown(f"<div style='background:rgba(255,255,255,.03);{border}border-radius:10px;padding:.8rem 1rem;margin-bottom:.5rem;'><b>Pinnacle {i}</b> (Ages {s-y}–{e-y if e-y-y<100 else '∞'}): <b>Number {n}</b> (Challenge: {c}) <br><span style='font-size: 0.8rem;'>{PERSONAL_YEAR_MEANINGS.get(n,'')}</span> <span style='color:#d4944a;font-size:.75rem;float:right;'>{label}</span></div>",unsafe_allow_html=True)
-            
-            pdf_req = f"  {PDF_NUMEV}" if "Vedic" in sys3 else f"  {PDF_NUMEW1}\n  {PDF_NUMEW2}"
-            prompt=f"""<context>
-<system_rules>
-MISSION: Personal Cycles and Pinnacle analysis — {sys3}.
-MUST use rules from:\n{pdf_req}
-</system_rules>
-<user_data>
-Subject: {cyc_name.strip()} | DOB: {cyc_dob.isoformat()}
-Life Path: {lp} | Personal Year: {py} | Personal Month: {pm} | Personal Day: {pd}
-Pinnacle 1 (Ages {r1[0]-y}-{r1[1]-y}): Number {r1[2]} | Challenge Number: {r1[3]}
-Pinnacle 2 (Ages {r2[0]-y}-{r2[1]-y}): Number {r2[2]} | Challenge Number: {r2[3]}
-Pinnacle 3 (Ages {r3[0]-y}-{r3[1]-y}): Number {r3[2]} | Challenge Number: {r3[3]}
-Pinnacle 4 (Ages {r4[0]-y}+): Number {r4[2]} | Challenge Number: {r4[3]}
-</user_data>
-<task>Explain current Personal Year energy and what it means for the next 12 months. Explain the active Pinnacle, what theme it represents, AND how the Challenge Number associated with it will test them.</task>
-</context>"""
+                st.markdown(f"<div style='background:rgba(255,255,255,.03);{border}border-radius:10px;padding:.8rem 1rem;margin-bottom:.5rem;'><b>Pinnacle {i}</b> (Ages {s-y}–{e-y if e-y-y<100 else '∞'}): <b>Number {n}</b> — {PERSONAL_YEAR_MEANINGS.get(n,'')} <span style='color:#d4944a;font-size:.75rem;'>{label}</span></div>",unsafe_allow_html=True)
+            prompt=(f"MISSION: Personal Cycles and Pinnacle analysis — {sys3}.\n\n"
+                    f"══ PRIMARY KNOWLEDGE BASE ══\n"
+                    +(f"MUST use: {PDF_NUMEV}\n\n" if "Vedic" in sys3 else f"MUST use:\n  {PDF_NUMEW1}\n  {PDF_NUMEW2}\n\n")
+                    +f"Subject: {cyc_name.strip()} | DOB: {cyc_dob.isoformat()}\n"
+                    +f"Life Path: {lp} | Personal Year: {py} | Personal Month: {pm} | Personal Day: {pd}\n"
+                    +f"Pinnacle 1 (Ages {r1[0]-y}-{r1[1]-y}): Number {r1[2]}\n"
+                    +f"Pinnacle 2 (Ages {r2[0]-y}-{r2[1]-y}): Number {r2[2]}\n"
+                    +f"Pinnacle 3 (Ages {r3[0]-y}-{r3[1]-y}): Number {r3[2]}\n"
+                    +f"Pinnacle 4 (Ages {r4[0]-y}+): Number {r4[2]}\n\n"
+                    +"Explain: current Personal Year energy and what it means for the next 12 months, and which Pinnacle is currently active and what major life theme it represents.")
             render_post_generation(prompt)
 
 # ══════════════════════════════════════════════════════
 # SAVED PROFILES / VAULT
 # ══════════════════════════════════════════════════════
 def show_vault():
+    auto_close_sidebar()
     st.markdown("<h1>📖 Saved Profiles</h1>",unsafe_allow_html=True)
     dp_idx=st.session_state.default_profile_idx
     if not st.session_state.db:
@@ -1877,34 +1907,30 @@ def show_vault():
         for i,p in enumerate(st.session_state.db):
             with cols[i%3]:
                 is_def=dp_idx==i
-                
-                # FIXED: Removed raw HTML injection to prevent code leakage. Now utilizing native st.container.
-                with st.container(border=True):
+                border_color="rgba(205,140,80,.5)" if is_def else "rgba(255,255,255,.08)"
+                st.markdown(f"""<div style='background:rgba(255,255,255,.03);border:1px solid {border_color};border-radius:14px;padding:1rem;margin-bottom:.8rem;'>
+                {'<span class="default-badge">⭐ Default</span><br>' if is_def else ''}
+                <p style='font-weight:600;font-size:1rem;color:#fff;margin:.3rem 0 .1rem;'>{p['name']}</p>
+                <p style='font-size:.78rem;color:rgba(190,185,210,.6);margin:0;'>{format_date_ui(p['date'])} · {p['time']}</p>
+                <p style='font-size:.76rem;color:rgba(180,175,200,.45);margin:.15rem 0 0;'>📍 {p['place'].split(',')[0]}</p></div>""",unsafe_allow_html=True)
+                btn_col1,btn_col2,btn_col3=st.columns(3)
+                with btn_col1:
+                    if st.button("✏️",key=f"v_edit_{i}",use_container_width=True,help="Edit"):
+                        st.session_state.editing_idx=i; st.rerun()
+                with btn_col2:
                     if is_def:
-                        st.markdown('<span class="default-badge" style="margin-bottom:0.5rem; display:inline-block;">⭐ Default</span>', unsafe_allow_html=True)
-                    st.markdown(f"**{p['name']}**")
-                    st.caption(f"{format_date_ui(p['date'])} · {p['time']}")
-                    st.caption(f"📍 {p['place'].split(',')[0]}")
-                    
-                    btn_col1,btn_col2,btn_col3=st.columns(3)
-                    with btn_col1:
-                        if st.button("✏️",key=f"v_edit_{i}",use_container_width=True,help="Edit"):
-                            st.session_state.editing_idx=i; st.rerun()
-                    with btn_col2:
-                        if is_def:
-                            if st.button("★",key=f"v_def_{i}",use_container_width=True,help="Remove default"):
-                                clear_default_profile(); st.rerun()
-                        else:
-                            if st.button("☆",key=f"v_def_{i}",use_container_width=True,help="Set as my profile"):
-                                set_default_profile(i); st.rerun()
-                    with btn_col3:
-                        if st.button("🗑️",key=f"v_del_{i}",use_container_width=True,help="Delete"):
-                            st.session_state.db.pop(i); sync_db()
-                            if dp_idx==i: clear_default_profile()
-                            elif dp_idx is not None and dp_idx>i: set_default_profile(dp_idx-1)
-                            if st.session_state.editing_idx==i: st.session_state.editing_idx=None
-                            st.rerun()
-                            
+                        if st.button("★",key=f"v_def_{i}",use_container_width=True,help="Remove default"):
+                            clear_default_profile(); st.rerun()
+                    else:
+                        if st.button("☆",key=f"v_def_{i}",use_container_width=True,help="Set as my profile"):
+                            set_default_profile(i); st.rerun()
+                with btn_col3:
+                    if st.button("🗑️",key=f"v_del_{i}",use_container_width=True,help="Delete"):
+                        st.session_state.db.pop(i); sync_db()
+                        if dp_idx==i: clear_default_profile()
+                        elif dp_idx is not None and dp_idx>i: set_default_profile(dp_idx-1)
+                        if st.session_state.editing_idx==i: st.session_state.editing_idx=None
+                        st.rerun()
         if dp_idx is not None and 0<=dp_idx<len(st.session_state.db):
             st.info(f"⭐ **{st.session_state.db[dp_idx]['name']}** is your default profile. It appears first in all dropdowns and auto-loads on the Dashboard.")
         else:
