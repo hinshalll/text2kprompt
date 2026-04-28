@@ -1717,56 +1717,41 @@ def show_dashboard():
             "forecast": True,
             "decide": True,
             "calendar": True,
-            "tarot": True 
+            "tarot": True
         }
 
-    st.markdown("## ⚡ Life OS Command Center")
-
-    # ───── PROFILE SWITCHER ─────
-    opts = sorted_profile_options()
-    if not opts:
-        st.info("💡 Go to **Saved Profiles** and add yourself to unlock your Life OS.")
+    # ───── STRICT PERSONAL OS LOGIC ─────
+    dp, active_idx = get_default_profile()
+    
+    if not dp:
+        st.markdown("## 🧭 The Cosmic Compass")
+        st.info("💡 Welcome! Go to **Saved Profiles** and tap the ⭐ next to your name to set up your personal dashboard.")
+        render_bottom_nav()
         return
 
-    dp, dp_idx = get_default_profile()
-    labels = []
-    index_map = []
-
-    for i, p in opts:
-        labels.append(f"{'⭐ ' if i==dp_idx else ''}{p['name']}")
-        index_map.append(i)
-
-    if "active_profile_idx" not in st.session_state:
-        st.session_state.active_profile_idx = index_map[0]
-
-    # Handle case where active profile was deleted
-    if st.session_state.active_profile_idx not in index_map:
-        st.session_state.active_profile_idx = index_map[0]
-
-    current_pos = index_map.index(st.session_state.active_profile_idx)
-
-    c1, c2 = st.columns([3,1])
-    with c1:
-        selected = st.selectbox("Active Profile", labels, index=current_pos, label_visibility="collapsed")
-    with c2:
-        with st.popover("⚙️ Modules"):
-            st.session_state.dash_toggles["forecast"] = st.checkbox("Forecast Cards", value=st.session_state.dash_toggles["forecast"])
-            st.session_state.dash_toggles["decide"] = st.checkbox("Astro-Decide", value=st.session_state.dash_toggles["decide"])
-            st.session_state.dash_toggles["calendar"] = st.checkbox("7-Day Calendar", value=st.session_state.dash_toggles["calendar"])
-            st.session_state.dash_toggles["tarot"] = st.checkbox("Daily Tarot", value=st.session_state.dash_toggles["tarot"])
-
-    active_idx = index_map[labels.index(selected)]
-    st.session_state.active_profile_idx = active_idx
-    prof = st.session_state.db[active_idx]
-
+    # Keep the profile data loaded
+    prof = dp
     tz = prof.get("tz", "Asia/Kolkata")
     today_str = get_local_today(tz).isoformat()
-    
+
+    # Clean Header with just the Settings Gear
+    c1, c2 = st.columns([5, 1])
+    with c1:
+        st.markdown(f"## 🧭 {prof['name'].split()[0]}'s Compass")
+    with c2:
+        with st.popover("⚙️"):
+            st.session_state.dash_toggles["forecast"] = st.checkbox("Forecast", value=st.session_state.dash_toggles["forecast"])
+            st.session_state.dash_toggles["decide"] = st.checkbox("Astro-Decide", value=st.session_state.dash_toggles["decide"])
+            st.session_state.dash_toggles["calendar"] = st.checkbox("Calendar", value=st.session_state.dash_toggles["calendar"])
+            st.session_state.dash_toggles["tarot"] = st.checkbox("Tarot", value=st.session_state.dash_toggles["tarot"])
+
     st.markdown("---")
+    
+    # ... [The rest of your code (Forecast Cards, Astro-Decide, etc.) remains exactly the same below this line!] ...
 
     # ───── 10-SECOND FORECAST CARDS ─────
     if st.session_state.dash_toggles["forecast"]:
-        st.markdown(f"### 📡 {prof['name']} — Today")
+        st.markdown("### 📡 Today's Energy")
 
         cache_key = f"forecast_{active_idx}_{today_str}"
 
@@ -1841,7 +1826,7 @@ def show_dashboard():
     # ───── 7 DAY CALENDAR ─────
     if st.session_state.dash_toggles["calendar"]:
         st.markdown("### 📅 Next 7 Days")
-
+        st.caption("Your personalized cosmic weather forecast based on your Moon sign. Use this to plan your week at a glance: 🟢 Green means push forward, 🔴 Red means lay low.")
         now = datetime.now(ZoneInfo(tz))
         prof_date = date.fromisoformat(prof['date'])
         prof_time = datetime.strptime(prof['time'], "%H:%M").time()
@@ -1878,34 +1863,86 @@ def show_dashboard():
     if st.session_state.dash_toggles.get("tarot", False):
         st.markdown("### 🃏 Daily Tarot Guidance")
         
-        # 1. Seed the randomizer to the profile name + date. 
-        # This guarantees the card stays the same all day for this specific person.
         import random
         rng = random.Random(f"{prof['name']}_{today_str}")
         daily_card = rng.choice(FULL_TAROT_DECK)
         daily_state = rng.choice(["Upright", "Reversed"])
         
         cache_key_tarot = f"dash_tarot_{active_idx}_{today_str}"
+        is_revealed = cache_key_tarot in st.session_state
         
-        t1, t2 = st.columns([1, 2.5])
+        # Adjusted columns to give the card slightly more room
+        t1, t2 = st.columns([1.2, 3]) 
         
         with t1:
-            # Display the card visually
             img_url = f"{TAROT_BASE}{get_filename(daily_card)}"
-            rev_css = "transform: rotate(180deg);" if daily_state == "Reversed" else ""
+            back_url = f"{TAROT_BASE}tarotrear.png"
+            rev_class = "reversed" if daily_state == "Reversed" else ""
+            anim_class = "dash-tarot-revealed" if is_revealed else "dash-tarot-hidden"
+            
+            # Increased width from 90px to 130px
             st.markdown(f"""
-            <div style="border-radius:8px; overflow:hidden; border:2px solid rgba(205,140,80,.6); {rev_css} margin-bottom:5px;">
-                <img src="{img_url}" style="width:100%; display:block;">
+            <style>
+            .dash-tarot-scene {{
+                width: 130px; 
+                aspect-ratio: 2/3;
+                perspective: 1000px;
+                margin: 0 auto;
+            }}
+            .dash-tarot-card {{
+                width: 100%; height: 100%;
+                position: relative;
+                transform-style: preserve-3d;
+            }}
+            .dash-tarot-revealed {{
+                animation: dashFlip 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+            }}
+            .dash-tarot-hidden {{
+                transform: rotateY(0deg);
+            }}
+            @keyframes dashFlip {{
+                0% {{ transform: rotateY(0deg); }}
+                100% {{ transform: rotateY(180deg); }}
+            }}
+            .dash-tarot-face {{
+                position: absolute; inset: 0;
+                width: 100%; height: 100%;
+                backface-visibility: hidden;
+                border-radius: 6px;
+                box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+                background-size: cover; background-position: center;
+                border: 2px solid rgba(205,140,80,.6);
+            }}
+            .dash-tarot-front {{
+                transform: rotateY(180deg);
+                background-image: url('{img_url}');
+            }}
+            .dash-tarot-front.reversed {{
+                transform: rotateY(180deg) rotateZ(180deg);
+            }}
+            .dash-tarot-back {{
+                background-image: url('{back_url}');
+            }}
+            </style>
+            <div class="dash-tarot-scene">
+                <div class="dash-tarot-card {anim_class}">
+                    <div class="dash-tarot-face dash-tarot-back"></div>
+                    <div class="dash-tarot-face dash-tarot-front {rev_class}"></div>
+                </div>
             </div>
-            <div style="text-align:center; font-size:0.7rem; color:#beb9cd; font-weight:600;">{daily_card}<br>({daily_state})</div>
             """, unsafe_allow_html=True)
             
+            if is_revealed:
+                st.markdown(f"<div style='text-align:center; font-size:0.75rem; color:#beb9cd; font-weight:600; margin-top:8px;'>{daily_card}<br>({daily_state})</div>", unsafe_allow_html=True)
+            else:
+                st.markdown("<div style='text-align:center; font-size:0.75rem; color:#beb9cd; font-weight:600; margin-top:8px;'>The Oracle is waiting</div>", unsafe_allow_html=True)
+
         with t2:
-            if cache_key_tarot not in st.session_state:
-                if st.button("Interpret Today's Card ✨", use_container_width=True):
+            if not is_revealed:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("Reveal & Interpret Today's Card ✨", use_container_width=True):
                     with st.spinner("Channeling the deck..."):
                         base_prompt = build_daily_tarot_prompt(daily_card, daily_state)
-                        # Force JSON output for a clean UI
                         json_prompt = base_prompt + """\nRESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN:
                         {
                             "MEANING": "What the card means today.",
@@ -1921,13 +1958,30 @@ def show_dashboard():
                         })
                         st.rerun()
             
-            if cache_key_tarot in st.session_state:
+            if is_revealed:
+                fx_key = f"fx_played_{cache_key_tarot}"
+                if not st.session_state.get(fx_key, False):
+                    st.session_state[fx_key] = True
+                    # PROPER way to run JS in Streamlit
+                    import streamlit.components.v1 as components
+                    components.html("""
+                    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+                    <script>
+                        setTimeout(() => {
+                            confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: ['#cd8c50', '#9062de', '#ffffff'] });
+                            const audio = new Audio("https://actions.google.com/sounds/v1/magic/magic_chime.ogg");
+                            audio.volume = 0.5;
+                            audio.play().catch(e => console.log("Audio blocked by browser."));
+                        }, 300);
+                    </script>
+                    """, height=0)
+
                 t_data = st.session_state[cache_key_tarot]
                 st.markdown(f"""
                 <div style="background:rgba(255,255,255,0.03); padding:15px; border-radius:10px; border:1px solid rgba(255,255,255,0.08); height:100%;">
-                    <p style="margin:0 0 10px 0; font-size:0.85rem;"><b style="color:#fff;">Meaning:</b><br><span style="color:#beb9cd;">{t_data.get('MEANING', '')}</span></p>
-                    <p style="margin:0 0 10px 0; font-size:0.85rem;"><b style="color:#fff;">Action:</b><br><span style="color:#beb9cd;">{t_data.get('ACTION', '')}</span></p>
-                    <p style="margin:0; font-size:0.85rem;"><b style="color:#cd8c50;">Mantra:</b><br><i style="color:#e0d8f0;">"{t_data.get('MANTRA', '')}"</i></p>
+                    <p style="margin:0 0 10px 0; font-size:0.85rem;"><b style="color:#fff;">Meaning:</b> <span style="color:#beb9cd;">{t_data.get('MEANING', '')}</span></p>
+                    <p style="margin:0 0 10px 0; font-size:0.85rem;"><b style="color:#fff;">Action:</b> <span style="color:#beb9cd;">{t_data.get('ACTION', '')}</span></p>
+                    <p style="margin:0; font-size:0.85rem;"><b style="color:#cd8c50;">Mantra:</b> <i style="color:#e0d8f0;">"{t_data.get('MANTRA', '')}"</i></p>
                 </div>
                 """, unsafe_allow_html=True)
 
