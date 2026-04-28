@@ -1457,7 +1457,7 @@ def render_profile_form(key_prefix,show_d60=True,default_from_profile=None):
             pre_ampm=1 if pt and pt.hour>=12 else 0
             st.session_state[f"n_{key_prefix}"]=st.text_input("Name",value=pre['name'] if pre else "",key=f"wn_{key_prefix}")
             pre_date=date.fromisoformat(pre['date']) if pre else date(2000,1,1)
-            st.session_state[f"d_{key_prefix}"]=st.date_input("Date of Birth",pre_date,key=f"wd_{key_prefix}")
+            st.session_state[f"d_{key_prefix}"]=st.date_input("Date of Birth",pre_date,min_value=date(1850,1,1),max_value=date(2050,12,31),key=f"wd_{key_prefix}")
             t1,t2,t3=st.columns(3)
             with t1: st.session_state[f"hr_{key_prefix}"]=st.number_input("Hour",1,12,pre_hr,key=f"whr_{key_prefix}")
             with t2: st.session_state[f"mi_{key_prefix}"]=st.number_input("Min",0,59,pre_mi,key=f"wmi_{key_prefix}")
@@ -1897,7 +1897,7 @@ def show_tarot():
     elif "Birth Card" in tab_choice:
         st.markdown("#### Your Tarot Birth Card")
         st.caption("A permanent card determined by your date of birth — it represents your soul's archetype and lifelong theme.")
-        bc_dob=st.date_input("Date of Birth",date(2000,1,1),key="bc_dob_input")
+        bc_dob=st.date_input("Date of Birth",date(2000,1,1),min_value=date(1850,1,1),max_value=date(2050,12,31),key="bc_dob_input")
         if st.button("Reveal My Birth Card",type="primary",use_container_width=True,key="reveal_bc"):
             st.session_state.bc_dob=bc_dob; st.session_state.bc_revealed=True
         if st.session_state.bc_revealed and st.session_state.bc_dob:
@@ -1923,7 +1923,7 @@ def show_horoscopes():
     today=get_local_today(user_tz)  # FIX: use user timezone
     t1,t2=st.tabs(["☀️ Western (Sun Sign)","🌙 Vedic (Moon Sign)"])
     with t1:
-        dob=st.date_input("Date of Birth",date(2000,1,1),key="h_w_dob")
+        dob=st.date_input("Date of Birth",date(2000,1,1),min_value=date(1850,1,1),max_value=date(2050,12,31),key="h_w_dob")
         if st.button("Show Horoscope",type="primary",key="w_btn"):
             sign=get_western_sign(dob.month,dob.day); st.success(f"Your Sun Sign: **{sign}**")
             pt1,pt2,pt3=st.tabs(["Daily","Monthly","Yearly"])
@@ -1966,7 +1966,7 @@ def show_numerology():
         else:
             c1,c2=st.columns(2)
             with c1: num_name=st.text_input("Full Birth Name",value=dp['name'] if dp else "",key="num_name")
-            with c2: pre_dob=date.fromisoformat(dp['date']) if dp else date(2000,1,1); num_dob=st.date_input("Date of Birth",pre_dob,key="num_dob")
+            with c2: pre_dob=date.fromisoformat(dp['date']) if dp else date(2000,1,1); num_dob=st.date_input("Date of Birth",pre_dob,min_value=date(1850,1,1),max_value=date(2050,12,31),key="num_dob")
         if st.button("Generate Numerology Prompt",type="primary",use_container_width=True):
             if use_astro:
                 if item["type"]=="empty_saved": st.error("Select a saved profile."); return
@@ -1990,7 +1990,7 @@ def show_numerology():
         sys3=st.radio("System",["Western (Pythagorean)","Indian/Vedic (Chaldean)"],horizontal=True,key="cyc_sys")
         c1,c2=st.columns(2)
         with c1: cyc_name=st.text_input("Full Birth Name",value=dp['name'] if dp else "",key="cyc_name")
-        with c2: pre_dob=date.fromisoformat(dp['date']) if dp else date(2000,1,1); cyc_dob=st.date_input("Date of Birth",pre_dob,key="cyc_dob")
+        with c2: pre_dob=date.fromisoformat(dp['date']) if dp else date(2000,1,1); cyc_dob=st.date_input("Date of Birth",pre_dob,min_value=date(1850,1,1),max_value=date(2050,12,31),key="cyc_dob")
         if st.button("Show My Cycles",type="primary",use_container_width=True):
             if not cyc_name.strip(): st.error("Enter your name."); return
             lp,_,_,_=calculate_numerology_core(cyc_name.strip(),cyc_dob.isoformat(),sys3)
@@ -2131,7 +2131,7 @@ def show_vault():
         with st.container(border=True):
             c1,c2=st.columns(2)
             with c1:
-                v_n=st.text_input("Name",key="v_new_n"); v_d=st.date_input("Date of Birth",date(2000,1,1),key="v_new_d")
+                v_n=st.text_input("Name",key="v_new_n"); v_d=st.date_input("Date of Birth",date(2000,1,1),min_value=date(1850,1,1),max_value=date(2050,12,31),key="v_new_d")
                 t1,t2,t3=st.columns(3)
                 with t1: v_h=st.number_input("Hour",1,12,12,key="v_new_h")
                 with t2: v_m=st.number_input("Min",0,59,0,key="v_new_m")
