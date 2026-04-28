@@ -136,10 +136,12 @@ if 'db_loaded' not in st.session_state:
             except: pass
         elif isinstance(saved,list): st.session_state.db=saved
     st.session_state.db_loaded=True
+
 if 'default_profile_idx' not in st.session_state:
     di=localS.getItem("kundli_default")
     try: st.session_state.default_profile_idx=int(di) if di is not None and str(di).strip().isdigit() else None
     except: st.session_state.default_profile_idx=None
+    
 if 'needs_sync'       not in st.session_state: st.session_state.needs_sync=False
 if 'custom_criteria'  not in st.session_state: st.session_state.custom_criteria=[]
 if 'editing_idx'      not in st.session_state: st.session_state.editing_idx=None
@@ -180,11 +182,14 @@ def get_default_profile():
     if idx is not None and 0<=idx<len(st.session_state.db): return st.session_state.db[idx],idx
     return None,None
 def set_default_profile(idx):
-    st.session_state.default_profile_idx=idx
-    localS.setItem("kundli_default",str(idx))
+    st.session_state.default_profile_idx = idx
+    st.session_state.needs_sync = True  # Triggers your working save engine
+    st.toast("⭐ Default profile locked!")
+
 def clear_default_profile():
-    st.session_state.default_profile_idx=None
-    localS.setItem("kundli_default","")
+    st.session_state.default_profile_idx = None
+    st.session_state.needs_sync = True  # Triggers your working save engine
+    st.toast("Default profile cleared.")
 def get_local_today(tz_string="Asia/Kolkata"):
     """FIX: Use user timezone, not server UTC, for date-based features."""
     try: return datetime.now(ZoneInfo(tz_string)).date()
@@ -200,6 +205,16 @@ def sorted_profile_options():
 # ═══════════════════════════════════════════════════════════
 # BASIC HELPERS
 # ═══════════════════════════════════════════════════════════
+
+def safe_json(text_response, fallback_dict):
+    """Safely extracts and parses JSON from Gemini, falling back to defaults if it fails."""
+    try:
+        # Strip markdown code blocks if the AI includes them
+        clean_text = text_response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        return json.loads(clean_text)
+    except json.JSONDecodeError:
+        return fallback_dict
+
 def sign_name(i): return SIGNS[i%12]
 def sign_index_from_lon(lon): return int(lon//30)%12
 def format_dms(angle):
@@ -323,6 +338,65 @@ def get_ai_model(system_prompt=None):
     
     return genai.GenerativeModel('gemini-3-flash-preview')
 
+# ═══════════════════════════════════════════════════════════
+# THE UNIVERSAL AI CHAT ENGINE
+# ═══════════════════════════════════════════════════════════
+def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting..."):
+    """A universal component that streams AI text and handles follow-up chats."""
+    st.markdown("---")
+    st.markdown("### ✨ AI Reading")
+    
+    model = get_ai_model()
+    
+    # 1. First run: Generate the main reading
+    if memory_key not in st.session_state or len(st.session_state[memory_key]) == 0:
+        st.session_state[memory_key] = []
+        chat = model.start_chat(history=[])
+        
+        res_ph = st.empty()
+        f_res = ""
+        with st.spinner(spinner_text):
+            try:
+                response = chat.send_message(prompt, stream=True)
+                for chunk in response:
+                    f_res += chunk.text
+                    res_ph.markdown(f_res + "▌")
+                res_ph.markdown(f_res)
+                
+                # Save to memory
+                st.session_state[memory_key].append({"role": "user", "parts": [prompt]})
+                st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
+            except Exception as e:
+                st.error(f"API Error: {e}")
+                return
+
+    # 2. Render existing chat history
+    if len(st.session_state[memory_key]) > 0:
+        for i, msg in enumerate(st.session_state[memory_key]):
+            if i == 0: continue # Hide the giant hidden prompt
+            role = "assistant" if msg["role"] == "model" else "user"
+            with st.chat_message(role):
+                st.markdown(msg["parts"][0])
+
+        # 3. Follow-up Chat Box
+        if follow_up := st.chat_input("Ask a follow-up question...", key=f"chatin_{memory_key}"):
+            with st.chat_message("user"):
+                st.markdown(follow_up)
+                
+            with st.chat_message("assistant"):
+                res_ph = st.empty()
+                f_res = ""
+                with st.spinner("Thinking..."):
+                    chat = model.start_chat(history=st.session_state[memory_key])
+                    res = chat.send_message(follow_up, stream=True)
+                    for chunk in res:
+                        f_res += chunk.text
+                        res_ph.markdown(f_res + "▌")
+                    res_ph.markdown(f_res)
+                    
+            st.session_state[memory_key].append({"role": "user", "parts": [follow_up]})
+            st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
+            st.rerun()
 
 # ═══════════════════════════════════════════════════════════
 # ADVANCED ASTRO ENGINES
@@ -1263,6 +1337,48 @@ Deliver a complete report:
 {'7. Astro-Numerology Synthesis — Where both systems agree and diverge' if astro_dossier else ''}
 </mission>"""
     return f"{instructions}\n\n{data}\n\n{cross}\n\n{mission}"
+    
+    
+def build_forecast_cards_prompt(dossier, transits):
+    return f"""<instructions>
+You are an elite Vedic timing strategist. Analyze the user's natal chart against today's live transits.
+Provide exactly four short, punchy phrases (max 5 words each) and one summary sentence.
+RESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN. NO EXTRA TEXT.
+{{
+  "ENERGY": "High/Low/Erratic/Focused",
+  "FOCUS": "What to do today",
+  "CAUTION": "What to avoid today",
+  "WINDOW": "Best time of day",
+  "SUMMARY": "One short sentence summarizing the vibe."
+}}
+</instructions>
+
+<data>
+{transits}
+
+{dossier}
+</data>"""
+
+def build_astro_decide_prompt(dossier, transits, question):
+    return f"""<instructions>
+You are an Astro-Decide engine. Analyze the transits against the natal chart to answer the user's question.
+RESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN. NO EXTRA TEXT.
+{{
+  "VERDICT": "YES / NO / WAIT / PROCEED CAUTIOUSLY",
+  "WHY": "One sentence astrological reason.",
+  "ALTERNATIVE": "One sentence advice on what to do instead or when to act."
+}}
+</instructions>
+
+<decision_query>
+{question}
+</decision_query>
+
+<data>
+{transits}
+
+{dossier}
+</data>"""
 
 # ═══════════════════════════════════════════════════════════
 # CSS
@@ -1571,9 +1687,6 @@ def render_sidebar():
 # ═══════════════════════════════════════════════════════════
 # DASHBOARD
 # ═══════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════
-# DASHBOARD
-# ═══════════════════════════════════════════════════════════
 def calculate_tara_bala(natal_moon_lon, transit_moon_lon):
     """
     Calculates the 9-point Tara Bala (Star Strength) system.
@@ -1599,177 +1712,270 @@ def calculate_tara_bala(natal_moon_lon, transit_moon_lon):
     return tara_meanings[tara_value]
 
 def show_dashboard():
-    st.markdown("## ⚡ Your Daily Command Center")
-    
-    dp, dp_idx = get_default_profile()
-    if not dp:
-        st.info("💡 Go to **Saved Profiles** and set a ⭐ default profile to unlock your daily cosmic briefing.")
+    if "dash_toggles" not in st.session_state:
+        st.session_state.dash_toggles = {
+            "forecast": True,
+            "decide": True,
+            "calendar": True,
+            "tarot": True 
+        }
+
+    st.markdown("## ⚡ Life OS Command Center")
+
+    # ───── PROFILE SWITCHER ─────
+    opts = sorted_profile_options()
+    if not opts:
+        st.info("💡 Go to **Saved Profiles** and add yourself to unlock your Life OS.")
         return
-        
-    st.markdown(f"**Welcome back, {dp['name']}. Here is how to play your hand today.**")
-    st.markdown("---")
 
-    # --- 1. CALCULATE TARA BALA (The Traffic Light) ---
-    prof_date = date.fromisoformat(dp['date'])
-    prof_time = datetime.strptime(dp['time'], "%H:%M").time()
-    jd_natal, _, _ = local_to_julian_day(prof_date, prof_time, dp['tz'])
+    dp, dp_idx = get_default_profile()
+    labels = []
+    index_map = []
 
-    now = datetime.now(ZoneInfo(dp['tz']))
-    utc_now = now.astimezone(ZoneInfo("UTC"))
-    jd_now = swe.julday(utc_now.year, utc_now.month, utc_now.day, 
-                        utc_now.hour + utc_now.minute/60.0)
-    
-    flags = swe.FLG_SWIEPH | swe.FLG_SIDEREAL
-    natal_moon_res, _ = swe.calc_ut(jd_natal, swe.MOON, flags)
-    transit_moon_res, _ = swe.calc_ut(jd_now, swe.MOON, flags)
-    
-    tara = calculate_tara_bala(natal_moon_res[0], transit_moon_res[0])
-    
-    st.subheader(f"🚦 Cosmic Traffic Light: {tara['color']} Day")
-    st.markdown(f"**Status:** {tara['status']} | **Active Energy:** {tara['tara']}")
-    st.info(f"**Action Plan:** {tara['advice']}")
-    
-    st.markdown("---")
-    
-    # --- 2. DAILY ASTRO-JOURNAL (The Hook) ---
-    st.subheader("🧠 Daily Astro-Journal")
-    st.write("**How are you feeling right now?**")
-    
-    if "today_mood" not in st.session_state:
-        st.session_state.today_mood = None
-    if "show_insight" not in st.session_state:
-        st.session_state.show_insight = False
-        
-    m1, m2, m3, m4 = st.columns(4)
-    if m1.button("😊 Great", use_container_width=True): st.session_state.today_mood = "Great"
-    if m2.button("😐 Neutral", use_container_width=True): st.session_state.today_mood = "Neutral"
-    if m3.button("😔 Low/Anxious", use_container_width=True): st.session_state.today_mood = "Low"
-    if m4.button("😡 Frustrated", use_container_width=True): st.session_state.today_mood = "Frustrated"
+    for i, p in opts:
+        labels.append(f"{'⭐ ' if i==dp_idx else ''}{p['name']}")
+        index_map.append(i)
 
-    focus = st.selectbox("What is your main focus today?", 
-                         ["Work & Career", "Money & Finances", "Love & Relationships", "Health & Rest", "Just getting by"])
+    if "active_profile_idx" not in st.session_state:
+        st.session_state.active_profile_idx = index_map[0]
 
-    if st.button("Generate My Cosmic Insight ⚡", type="primary"):
-        if not st.session_state.today_mood:
-            st.warning("Please select a mood first!")
-        else:
-            st.session_state.show_insight = True
+    # Handle case where active profile was deleted
+    if st.session_state.active_profile_idx not in index_map:
+        st.session_state.active_profile_idx = index_map[0]
 
-    if st.session_state.show_insight and st.session_state.today_mood:
-        with st.spinner("Analyzing your mood against today's transits..."):
-            time_module.sleep(1.5) 
-            st.success("Insight Generated!")
-            
-            st.info(f"""
-            **Your AI Insight for Today:** I see you are feeling **{st.session_state.today_mood}** while focusing on **{focus}**. 
-            
-            This makes complete astrological sense. Today is a {tara['color']} Day for you, and the transiting Moon is activating a sensitive point in your chart. Because your focus is {focus}, use today's {tara['tara']} energy to align your actions rather than forcing a result.
-            """)
-            
-            st.write("Did this insight help you understand your mood?")
-            c1, c2, c3 = st.columns([1,1,4])
-            with c1:
-                if st.button("👍 Yes"): st.toast("Feedback saved! Accuracy score updated.")
-            with c2:
-                if st.button("👎 No"): st.toast("Feedback saved. We will adjust tomorrow's reading.")
+    current_pos = index_map.index(st.session_state.active_profile_idx)
 
-    st.markdown("---")
-    
-    # --- 3. DEEP TOOLS NAVIGATION ---
-    st.markdown("### 🛠️ Deep Tools")
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns([3,1])
     with c1:
-        if st.button("The Oracle (Life Reading)", use_container_width=True):
-            st.session_state.nav_page = "The Oracle"
-            st.rerun()
+        selected = st.selectbox("Active Profile", labels, index=current_pos, label_visibility="collapsed")
     with c2:
-        if st.button("Numerology Analysis", use_container_width=True):
-            st.session_state.nav_page = "Numerology"
-            st.rerun()
-    with c3:
-        if st.button("Check Compatibility", use_container_width=True):
-            st.session_state.nav_page = "Compatibility"
-            st.rerun()
+        with st.popover("⚙️ Modules"):
+            st.session_state.dash_toggles["forecast"] = st.checkbox("Forecast Cards", value=st.session_state.dash_toggles["forecast"])
+            st.session_state.dash_toggles["decide"] = st.checkbox("Astro-Decide", value=st.session_state.dash_toggles["decide"])
+            st.session_state.dash_toggles["calendar"] = st.checkbox("7-Day Calendar", value=st.session_state.dash_toggles["calendar"])
+            st.session_state.dash_toggles["tarot"] = st.checkbox("Daily Tarot", value=st.session_state.dash_toggles["tarot"])
+
+    active_idx = index_map[labels.index(selected)]
+    st.session_state.active_profile_idx = active_idx
+    prof = st.session_state.db[active_idx]
+
+    tz = prof.get("tz", "Asia/Kolkata")
+    today_str = get_local_today(tz).isoformat()
+    
+    st.markdown("---")
+
+    # ───── 10-SECOND FORECAST CARDS ─────
+    if st.session_state.dash_toggles["forecast"]:
+        st.markdown(f"### 📡 {prof['name']} — Today")
+
+        cache_key = f"forecast_{active_idx}_{today_str}"
+
+        if cache_key not in st.session_state:
+            if st.button("Generate Today's Forecast ⚡", use_container_width=True):
+                with st.spinner("Calculating cosmic weather..."):
+                    dos = generate_astrology_dossier(prof, False, compact=True)
+                    transits = get_gochara_overlay(prof)
+
+                    prompt = build_forecast_cards_prompt(dos, transits)
+                    res = get_ai_model().generate_content(prompt).text
+
+                    st.session_state[cache_key] = safe_json(res, {
+                        "ENERGY": "Mixed",
+                        "FOCUS": "Routine",
+                        "CAUTION": "Impulsivity",
+                        "WINDOW": "Anytime",
+                        "SUMMARY": "Balanced day. Stick to your routines."
+                    })
+                    st.rerun()
+
+        if cache_key in st.session_state:
+            data = st.session_state[cache_key]
+            st.markdown(f"""
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 0.5rem;">
+                <div style="background:rgba(255,255,255,0.05); padding:12px; border-radius:10px; border-left:4px solid #cd8c50;">
+                    <span style="font-size:0.75rem; color:#beb9cd; text-transform:uppercase;">Energy</span><br>
+                    <span style="font-weight:600; color:#fff;">{data.get('ENERGY', 'N/A')}</span>
+                </div>
+                <div style="background:rgba(255,255,255,0.05); padding:12px; border-radius:10px; border-left:4px solid #9062de;">
+                    <span style="font-size:0.75rem; color:#beb9cd; text-transform:uppercase;">Focus</span><br>
+                    <span style="font-weight:600; color:#fff;">{data.get('FOCUS', 'N/A')}</span>
+                </div>
+                <div style="background:rgba(255,255,255,0.05); padding:12px; border-radius:10px; border-left:4px solid #e74c3c;">
+                    <span style="font-size:0.75rem; color:#beb9cd; text-transform:uppercase;">Caution</span><br>
+                    <span style="font-weight:600; color:#fff;">{data.get('CAUTION', 'N/A')}</span>
+                </div>
+                <div style="background:rgba(255,255,255,0.05); padding:12px; border-radius:10px; border-left:4px solid #2ecc71;">
+                    <span style="font-size:0.75rem; color:#beb9cd; text-transform:uppercase;">Best Time</span><br>
+                    <span style="font-weight:600; color:#fff;">{data.get('WINDOW', 'N/A')}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.caption(data.get("SUMMARY", ""))
             
+    # ───── ASTRO DECIDE ─────
+    if st.session_state.dash_toggles["decide"]:
+        st.markdown("### ⚖️ Astro-Decide")
+        q = st.text_input("What do you need to decide right now?", placeholder="e.g. Should I push the launch to tomorrow?")
+
+        if st.button("Decide", type="primary", use_container_width=True):
+            if not q.strip():
+                st.warning("Ask something first.")
+            else:
+                with st.spinner("Analyzing..."):
+                    dos = generate_astrology_dossier(prof, False, compact=True)
+                    transits = get_gochara_overlay(prof)
+
+                    prompt = build_astro_decide_prompt(dos, transits, q)
+                    res = get_ai_model().generate_content(prompt).text
+
+                    out = safe_json(res, {
+                        "VERDICT": "WAIT",
+                        "WHY": "Cosmic signals are unclear right now.",
+                        "ALTERNATIVE": "Delay action until tomorrow."
+                    })
+
+                    st.success(out.get("VERDICT", "WAIT"))
+                    st.write(out.get("WHY", ""))
+                    st.caption(out.get("ALTERNATIVE", ""))
+
+    # ───── 7 DAY CALENDAR ─────
+    if st.session_state.dash_toggles["calendar"]:
+        st.markdown("### 📅 Next 7 Days")
+
+        now = datetime.now(ZoneInfo(tz))
+        prof_date = date.fromisoformat(prof['date'])
+        prof_time = datetime.strptime(prof['time'], "%H:%M").time()
+
+        jd_natal, _, _ = local_to_julian_day(prof_date, prof_time, tz)
+        natal_moon = swe.calc_ut(jd_natal, swe.MOON)[0][0]
+
+        html = '<div style="display:flex; gap:8px; overflow-x:auto; padding-bottom:10px;">'
+
+        for i in range(7):
+            d = now + timedelta(days=i)
+            utc_d = d.astimezone(ZoneInfo("UTC"))
+            jd = swe.julday(utc_d.year, utc_d.month, utc_d.day, 12.0)
+            
+            moon = swe.calc_ut(jd, swe.MOON)[0][0]
+            tara = calculate_tara_bala(natal_moon, moon)
+
+            is_today = (i == 0)
+            bg = "rgba(144,98,222,0.2)" if is_today else "rgba(255,255,255,0.05)"
+            border = "border: 1px solid #9062de;" if is_today else "border: 1px solid rgba(255,255,255,0.1);"
+
+# NO INDENTATION below to prevent Markdown code blocks!
+            html += f"""<div style="min-width:100px; padding:10px; border-radius:10px; background:{bg}; {border} text-align:center; flex-shrink:0;">
+<div style="font-size:0.75rem; color:#beb9cd; font-weight:bold;">{'TODAY' if is_today else d.strftime('%a')}</div>
+<div style="font-size:1.2rem; margin:5px 0;">{tara['color'].split(' ')[0]}</div>
+<div style="font-size:0.75rem; color:#fff;">{tara['tara'].split(' ')[0]}</div>
+<div style="font-size:0.65rem; color:rgba(255,255,255,0.5); margin-top:3px;">{tara['status']}</div>
+</div>"""
+
+        html += "</div>"
+        st.markdown(html, unsafe_allow_html=True)
+
+# ───── DAILY TAROT ─────
+    if st.session_state.dash_toggles.get("tarot", False):
+        st.markdown("### 🃏 Daily Tarot Guidance")
+        
+        # 1. Seed the randomizer to the profile name + date. 
+        # This guarantees the card stays the same all day for this specific person.
+        import random
+        rng = random.Random(f"{prof['name']}_{today_str}")
+        daily_card = rng.choice(FULL_TAROT_DECK)
+        daily_state = rng.choice(["Upright", "Reversed"])
+        
+        cache_key_tarot = f"dash_tarot_{active_idx}_{today_str}"
+        
+        t1, t2 = st.columns([1, 2.5])
+        
+        with t1:
+            # Display the card visually
+            img_url = f"{TAROT_BASE}{get_filename(daily_card)}"
+            rev_css = "transform: rotate(180deg);" if daily_state == "Reversed" else ""
+            st.markdown(f"""
+            <div style="border-radius:8px; overflow:hidden; border:2px solid rgba(205,140,80,.6); {rev_css} margin-bottom:5px;">
+                <img src="{img_url}" style="width:100%; display:block;">
+            </div>
+            <div style="text-align:center; font-size:0.7rem; color:#beb9cd; font-weight:600;">{daily_card}<br>({daily_state})</div>
+            """, unsafe_allow_html=True)
+            
+        with t2:
+            if cache_key_tarot not in st.session_state:
+                if st.button("Interpret Today's Card ✨", use_container_width=True):
+                    with st.spinner("Channeling the deck..."):
+                        base_prompt = build_daily_tarot_prompt(daily_card, daily_state)
+                        # Force JSON output for a clean UI
+                        json_prompt = base_prompt + """\nRESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN:
+                        {
+                            "MEANING": "What the card means today.",
+                            "ACTION": "The best practical step to take.",
+                            "MANTRA": "A short, powerful affirmation."
+                        }"""
+                        
+                        res = get_ai_model().generate_content(json_prompt).text
+                        st.session_state[cache_key_tarot] = safe_json(res, {
+                            "MEANING": "Trust the process unfolding today.",
+                            "ACTION": "Observe before making any sudden moves.",
+                            "MANTRA": "I am exactly where I need to be."
+                        })
+                        st.rerun()
+            
+            if cache_key_tarot in st.session_state:
+                t_data = st.session_state[cache_key_tarot]
+                st.markdown(f"""
+                <div style="background:rgba(255,255,255,0.03); padding:15px; border-radius:10px; border:1px solid rgba(255,255,255,0.08); height:100%;">
+                    <p style="margin:0 0 10px 0; font-size:0.85rem;"><b style="color:#fff;">Meaning:</b><br><span style="color:#beb9cd;">{t_data.get('MEANING', '')}</span></p>
+                    <p style="margin:0 0 10px 0; font-size:0.85rem;"><b style="color:#fff;">Action:</b><br><span style="color:#beb9cd;">{t_data.get('ACTION', '')}</span></p>
+                    <p style="margin:0; font-size:0.85rem;"><b style="color:#cd8c50;">Mantra:</b><br><i style="color:#e0d8f0;">"{t_data.get('MANTRA', '')}"</i></p>
+                </div>
+                """, unsafe_allow_html=True)
+
     render_bottom_nav()
 
 # ═══════════════════════════════════════════════════════════
 # CONSULTATION ROOM (Global Chat)
 # ═══════════════════════════════════════════════════════════
 def show_consultation_room():
+    components.html("""<script>setTimeout(function(){var b=window.parent.document.querySelector('button[aria-label="Collapse sidebar"]');if(b&&window.parent.innerWidth<=768)b.click();},80);</script>""",height=0,width=0)
     st.markdown("<h1>💬 Ask the Astrologer</h1>", unsafe_allow_html=True)
     st.markdown("<p style='color:rgba(255,255,255,.6)'>Have a free-flowing conversation about your chart.</p>", unsafe_allow_html=True)
 
-    # 1. Select who we are talking about
     dp, dp_idx = get_default_profile()
     if not dp:
         st.warning("Please set a ⭐ default profile in 'Saved Profiles' first so the Astrologer knows who to look at.")
         return
 
     st.success(f"The Astrologer is currently looking at the chart for: **{dp['name']}**")
-    st.markdown("---")
-
-    # 2. Setup Chat History for this specific profile
-    chat_memory_key = f"chat_history_{dp['name']}"
-    if chat_memory_key not in st.session_state:
-        st.session_state[chat_memory_key] = []
-        
-        # Secretly generate the dossier in the background
+    
+    # 1. Setup the memory key for this specific profile
+    memory_key = f"consult_chat_{dp['name']}"
+    
+    # 2. If the chat is empty, silently build the massive chart dossier
+    if memory_key not in st.session_state or len(st.session_state[memory_key]) == 0:
         with st.spinner("Astrologer is studying the chart..."):
             dossier = generate_astrology_dossier(dp)
-            # We use your 'raw prompt' builder as the hidden system instructions
-            system_instruction = build_raw_prompt(dossier)
-            st.session_state[f"system_{dp['name']}"] = system_instruction
             
-            # --- THE FIX: Cleanly calculate the Ascendant sign ---
+            # Safely calculate Ascendant for a personal greeting
             prof_date = date.fromisoformat(dp['date'])
             prof_time = datetime.strptime(dp['time'], '%H:%M').time()
             jd_ut, _, _ = local_to_julian_day(prof_date, prof_time, dp['tz'])
             lagna_deg, _ = get_lagna_and_cusps(jd_ut, dp['lat'], dp['lon'])
             ascendant_sign = sign_name(sign_index_from_lon(lagna_deg))
             
-            welcome_msg = f"Hello {dp['name']}! I have your chart open. I see your Ascendant is {ascendant_sign}. What would you like to know about your life, career, or timing?"
+            # Combine the master rules with a prompt to trigger a welcome message
+            base_prompt = build_raw_prompt(dossier)
+            welcome_command = f"\n\n<mission>Acknowledge me by my name ({dp['name']}). Tell me you are looking at my chart and see my Ascendant is {ascendant_sign}. Keep it to 2 brief sentences. Then ask what I would like to know.</mission>"
             
-            # Add a welcoming first message from the AI
-            st.session_state[chat_memory_key].append({
-                "role": "model", 
-                "parts": [welcome_msg]
-            })
-
-    # 3. Connect to the AI with the hidden dossier
-    model = get_ai_model(st.session_state[f"system_{dp['name']}"])
-    # Load the history into Gemini's memory
-    chat = model.start_chat(history=st.session_state[chat_memory_key])
-
-    # 4. Display the chat history on screen
-    for msg in st.session_state[chat_memory_key]:
-        # 'model' becomes 'assistant' in Streamlit UI
-        role = "assistant" if msg["role"] == "model" else "user"
-        with st.chat_message(role):
-            st.markdown(msg["parts"][0])
-
-    # 5. The Chat Input Box
-    if user_text := st.chat_input("Ask a question..."):
-        # Show what the user typed
-        with st.chat_message("user"):
-            st.markdown(user_text)
+            st.session_state[f"consult_prompt_{dp['name']}"] = base_prompt + welcome_command
             
-        # Ask the AI and stream the answer
-        with st.chat_message("assistant"):
-            response_placeholder = st.empty()
-            full_response = ""
-            
-            with st.spinner("Consulting the stars..."):
-                response = chat.send_message(user_text, stream=True)
-                for chunk in response:
-                    full_response += chunk.text
-                    response_placeholder.markdown(full_response + "▌")
-                response_placeholder.markdown(full_response)
-                
-        # Save the new messages to Streamlit memory so they stay on screen
-        st.session_state[chat_memory_key].append({"role": "user", "parts": [user_text]})
-        st.session_state[chat_memory_key].append({"role": "model", "parts": [full_response]})
-
+    # 3. Fire up the Universal Engine!
+    if f"consult_prompt_{dp['name']}" in st.session_state:
+        # The engine hides the massive prompt and only shows the AI's greeting, then opens the chat box!
+        stream_ai_with_followup(st.session_state[f"consult_prompt_{dp['name']}"], memory_key, "Taking a seat at the table...")
+        
+    render_bottom_nav()
+    
 # ═══════════════════════════════════════════════════════════
 # ORACLE
 # ═══════════════════════════════════════════════════════════
@@ -1796,8 +2002,10 @@ def show_oracle():
 
 def _run_oracle(mission):
     dp,_=get_default_profile()
+    
+    # ── PRASHNA ──
     if mission=="Prashna Kundli":
-        question=st.text_area("Your question",placeholder="e.g. Will I get the job I applied for? When will I get married?")
+        question=st.text_area("Your question",placeholder="e.g. Will I get the job I applied for?")
         st.markdown("#### Your current location")
         c1,c2=st.columns(2)
         with c1:
@@ -1812,7 +2020,8 @@ def _run_oracle(mission):
                 prl=st.number_input("Lat",value=30.76,format="%.4f",key="prl")
                 prn=st.number_input("Lon",value=76.80,format="%.4f",key="prn")
                 prt=st.text_input("Timezone","Asia/Kolkata",key="prt")
-        if st.button("Generate Prashna Prompt",type="primary",use_container_width=True):
+                
+        if st.button("Generate Prashna Reading ✨",type="primary",use_container_width=True):
             if not question.strip(): st.error("Enter a question."); return
             if not pr_man:
                 geo=geocode_place(cur_place.strip())
@@ -1822,20 +2031,30 @@ def _run_oracle(mission):
             now=datetime.now(ZoneInfo(p_tz))
             prof={"name":"Prashna","date":now.date().isoformat(),"time":now.strftime("%H:%M"),"place":pn,"lat":p_lat,"lon":p_lon,"tz":p_tz}
             with st.spinner("Casting chart..."): dos=generate_astrology_dossier(prof)
-            render_post_generation(build_prashna_prompt(question,dos))
+            st.session_state.prashna_prompt = build_prashna_prompt(question,dos)
+            st.session_state.prashna_chat = [] # Clear memory
+            
+        if "prashna_prompt" in st.session_state:
+            stream_ai_with_followup(st.session_state.prashna_prompt, "prashna_chat", "Answering your Prashna...")
         return
 
+    # ── GOCHARA / TRANSIT ──
     if mission=="Gochara / Live Transit":
         st.markdown("#### Select your natal chart")
         item=render_profile_form("gochara",show_d60=False)
-        if st.button("Generate Live Transit Prompt",type="primary",use_container_width=True):
+        if st.button("Analyse Live Transits ✨",type="primary",use_container_width=True):
             if item["type"]=="empty_saved": st.error("Select a profile."); return
             prof,d60=resolve_profile(item)
             with st.spinner("Overlaying transits..."):
                 dos=generate_astrology_dossier(prof,d60); overlay=get_gochara_overlay(prof)
-            render_post_generation(build_transit_prompt(dos,overlay))
+            st.session_state.transit_prompt = build_transit_prompt(dos,overlay)
+            st.session_state.transit_chat = []
+            
+        if "transit_prompt" in st.session_state:
+            stream_ai_with_followup(st.session_state.transit_prompt, "transit_chat", "Reading the stars...")
         return
 
+    # ── MAIN ORACLE MODES ──
     req=1 if mission in ["Raw Data Only","Deep Personal Analysis"] else 2
     num_slots=st.session_state.comp_slots if mission=="Comparison (Multiple Profiles)" else req
     st.markdown("#### Profile Selection")
@@ -1873,12 +2092,9 @@ def _run_oracle(mission):
             if r1.checkbox(c,key=f"cc_{i}"): selected_criteria.append(c)
             if r2.button("✕",key=f"delc_{i}"): st.session_state.custom_criteria.pop(i); st.rerun()
 
-    btn_labels={"Raw Data Only":"Generate Chart Data","Deep Personal Analysis":"Generate Full Reading Prompt",
-                "Matchmaking / Compatibility":"Generate Compatibility Prompt","Comparison (Multiple Profiles)":"Generate Comparison Prompt"}
+    btn_labels={"Raw Data Only":"Generate Chart Data","Deep Personal Analysis":"Generate Full Reading ✨",
+                "Matchmaking / Compatibility":"Generate Compatibility Match ✨","Comparison (Multiple Profiles)":"Compare Profiles ✨"}
     
-    # Define the memory key OUTSIDE the button so the whole function knows about it
-    oracle_memory_key = f"oracle_{mission}_history"
-
     if st.button(btn_labels.get(mission,"Generate Prompt"),type="primary",use_container_width=True,key=f"gen_{mission}"):
         profiles=[]; d60s=[]
         for item in active:
@@ -1910,65 +2126,16 @@ def _run_oracle(mission):
                 pairs=[(p['name'],generate_astrology_dossier(p,d,compact)) for p,d in zip(profiles,d60s)]
                 final=build_comparison_prompt(pairs,selected_criteria)
                 
-        # --- GENERATE THE FIRST READING ---
-        st.markdown("---")
-        st.markdown(f"### ✨ The Oracle's Reading: {mission}")
-        
-        # Connect to AI and clear any old chat history for a fresh reading
-        model = get_ai_model()
-        st.session_state[oracle_memory_key] = [] 
-        chat = model.start_chat(history=[])
-        
-        response_placeholder = st.empty()
-        full_response = ""
-        
-        with st.spinner("The Oracle is channeling the stars..."):
-            response = chat.send_message(final, stream=True)
-            for chunk in response:
-                full_response += chunk.text
-                response_placeholder.markdown(full_response + "▌")
-            response_placeholder.markdown(full_response)
-            
-        # Save this to memory
-        st.session_state[oracle_memory_key].append({"role": "user", "parts": [final]})
-        st.session_state[oracle_memory_key].append({"role": "model", "parts": [full_response]})
+        # Save prompt to state so it persists outside the button press
+        st.session_state[f"oracle_prompt_{mission}"] = final
+        st.session_state[f"oracle_{mission}_history"] = [] # Clear memory for a fresh chat
 
-    # --- THE FOLLOW-UP CHAT UI (OUTSIDE THE BUTTON) ---
-    # If the reading has been generated, show the history and the chat box!
-    if oracle_memory_key in st.session_state and len(st.session_state[oracle_memory_key]) > 0:
-        st.markdown("---")
-        
-        # 1. Display the chat history (skipping the first giant hidden prompt)
-        for i, msg in enumerate(st.session_state[oracle_memory_key]):
-            if i == 0: continue 
-            role = "assistant" if msg["role"] == "model" else "user"
-            with st.chat_message(role):
-                st.markdown(msg["parts"][0])
-
-        # 2. The Chat Input Box
-        if follow_up := st.chat_input("Ask a follow-up question about this reading..."):
-            with st.chat_message("user"):
-                st.markdown(follow_up)
-                
-            with st.chat_message("assistant"):
-                res_ph = st.empty()
-                f_res = ""
-                with st.spinner("Thinking..."):
-                    # Reconnect to the model using the saved history
-                    model = get_ai_model()
-                    chat = model.start_chat(history=st.session_state[oracle_memory_key])
-                    res = chat.send_message(follow_up, stream=True)
-                    for chunk in res:
-                        f_res += chunk.text
-                        res_ph.markdown(f_res + "▌")
-                    res_ph.markdown(f_res)
-                    
-            # Save the new messages to memory
-            st.session_state[oracle_memory_key].append({"role": "user", "parts": [follow_up]})
-            st.session_state[oracle_memory_key].append({"role": "model", "parts": [f_res]})
-            
-            # Force a rerun to lock the new messages onto the screen smoothly
-            st.rerun()
+    # If the prompt is saved in the state, fire up the AI!
+    if f"oracle_prompt_{mission}" in st.session_state:
+        if mission=="Raw Data Only":
+            render_post_generation(st.session_state[f"oracle_prompt_{mission}"])
+        else:
+            stream_ai_with_followup(st.session_state[f"oracle_prompt_{mission}"], f"oracle_{mission}_history", "The Oracle is channeling the stars...")
 
     render_bottom_nav()
 
@@ -1980,11 +2147,9 @@ def show_tarot():
     st.markdown("<h1>🃏 Mystic Tarot</h1>",unsafe_allow_html=True)
     st.markdown("<p style='color:rgba(255,255,255,.6)'>Ask a question and consult the cards. Cryptographically secure randomisation.</p>",unsafe_allow_html=True)
 
-    # Tab selection — switching resets state
     tab_choice=st.radio("Mode",["✦ Three-Card Spread","☯ Yes / No Oracle","🔮 Celtic Cross (10 Cards)","🌟 Birth Card"],
                         horizontal=True,key="tarot_mode_radio",label_visibility="collapsed")
 
-    # Reset when tab changes
     if st.session_state.get("_last_tarot_tab","")!=tab_choice:
         st.session_state.tarot3_drawn=False; st.session_state.tarot3_cards=[]
         st.session_state.tarot3_states=[]; st.session_state.tarot3_mode="General Guidance"
@@ -2004,17 +2169,22 @@ def show_tarot():
         q=st.text_area("Your question",placeholder={"General Guidance":"e.g. What energy is around my career this month?",
             "Love & Dynamics":"e.g. What should I know about my connection with...","Decision / Two Paths":"e.g. Path A or Path B?"}[spread_mode],key="t3_q")
         rev=st.checkbox("Include Reversed Cards",key="t3_rev",help=tarot_reversed_help())
+        
         if st.button("Draw 3 Cards",type="primary",use_container_width=True,key="draw3"):
             if not q.strip(): st.error("Ask a question first."); return
             with st.spinner("Shuffling..."): time_module.sleep(1.2)
             rng=secrets.SystemRandom(); st.session_state.tarot3_cards=rng.sample(FULL_TAROT_DECK,3)
             st.session_state.tarot3_states=[rng.choice(["Upright","Reversed"]) if rev else "Upright" for _ in range(3)]
             st.session_state.tarot3_drawn=True; st.session_state.tarot3_mode=spread_mode
+            st.session_state.tarot3_chat = [] # Clear old chat history
+            
         if st.session_state.tarot3_drawn and st.session_state.tarot3_cards:
             render_tarot_overlay(st.session_state.tarot3_cards,st.session_state.tarot3_states,"three")
             st.markdown(f"**Cards:** {' · '.join(f'{c} ({s})' for c,s in zip(st.session_state.tarot3_cards,st.session_state.tarot3_states))}")
             prompt=build_tarot_prompt(q,st.session_state.tarot3_cards,st.session_state.tarot3_states,st.session_state.tarot3_mode)
-            render_post_generation(prompt)
+            
+            stream_ai_with_followup(prompt, "tarot3_chat", "Interpreting the cards...")
+            
             if st.button("🔄 New Reading",key="reset3"):
                 st.session_state.tarot3_drawn=False; st.session_state.tarot3_cards=[]; st.rerun()
 
@@ -2022,15 +2192,20 @@ def show_tarot():
     elif "Yes / No" in tab_choice:
         q=st.text_input("Your yes/no question",placeholder="e.g. Will this situation resolve in my favour?",key="yn_q")
         rev=st.checkbox("Include Reversed Cards",key="yn_rev",help=tarot_reversed_help())
+        
         if st.button("Draw One Card",type="primary",use_container_width=True,key="draw_yn"):
             if not q.strip(): st.error("Ask a question."); return
             rng=secrets.SystemRandom(); st.session_state.yn_card=rng.choice(FULL_TAROT_DECK)
             st.session_state.yn_state="Upright" if not rev else rng.choice(["Upright","Reversed"])
             st.session_state.yn_drawn=True
+            st.session_state.yn_chat = [] # Clear old chat history
+            
         if st.session_state.yn_drawn and st.session_state.yn_card:
             render_tarot_overlay([st.session_state.yn_card],[st.session_state.yn_state],"one")
             st.markdown(f"**Card:** {st.session_state.yn_card} ({st.session_state.yn_state})")
-            render_post_generation(build_yesno_prompt(q,st.session_state.yn_card,st.session_state.yn_state))
+            
+            stream_ai_with_followup(build_yesno_prompt(q,st.session_state.yn_card,st.session_state.yn_state), "yn_chat", "Sensing the answer...")
+            
             if st.button("🔄 Ask Again",key="reset_yn"):
                 st.session_state.yn_drawn=False; st.session_state.yn_card=None; st.rerun()
 
@@ -2038,17 +2213,22 @@ def show_tarot():
     elif "Celtic Cross" in tab_choice:
         q=st.text_area("Your question (optional)",placeholder="e.g. What do I need to know about the next chapter of my life?",key="cc_q")
         rev=st.checkbox("Include Reversed Cards",key="cc_rev",help=tarot_reversed_help())
+        
         if st.button("Draw 10 Cards",type="primary",use_container_width=True,key="draw_cc"):
             with st.spinner("Laying out the Celtic Cross..."): time_module.sleep(1.5)
             rng=secrets.SystemRandom(); st.session_state.cc_cards=rng.sample(FULL_TAROT_DECK,10)
             st.session_state.cc_states=["Upright" if not rev else rng.choice(["Upright","Reversed"]) for _ in range(10)]
             st.session_state.cc_drawn=True
+            st.session_state.cc_chat = [] # Clear old chat history
+            
         if st.session_state.cc_drawn and st.session_state.cc_cards:
             render_tarot_overlay(st.session_state.cc_cards,st.session_state.cc_states,"ten")
             for i,(c,s) in enumerate(zip(st.session_state.cc_cards,st.session_state.cc_states)):
                 st.markdown(f"**{CELTIC_CROSS_POSITIONS[i]}:** {c} ({s})")
             prompt=build_celtic_cross_prompt(q or "General life overview",st.session_state.cc_cards,st.session_state.cc_states)
-            render_post_generation(prompt)
+            
+            stream_ai_with_followup(prompt, "cc_chat", "Weaving the narrative...")
+            
             if st.button("🔄 New Celtic Cross",key="reset_cc"):
                 st.session_state.cc_drawn=False; st.session_state.cc_cards=[]; st.rerun()
 
@@ -2057,17 +2237,22 @@ def show_tarot():
         st.markdown("#### Your Tarot Birth Card")
         st.caption("A permanent card determined by your date of birth — it represents your soul's archetype and lifelong theme.")
         bc_dob=st.date_input("Date of Birth",date(2000,1,1),min_value=date(1850,1,1),max_value=date(2050,12,31),key="bc_dob_input")
+        
         if st.button("Reveal My Birth Card",type="primary",use_container_width=True,key="reveal_bc"):
             st.session_state.bc_dob=bc_dob; st.session_state.bc_revealed=True
+            st.session_state.bc_chat = [] # Clear old chat history
+            
         if st.session_state.bc_revealed and st.session_state.bc_dob:
             card=get_tarot_birth_card(st.session_state.bc_dob.isoformat())
-            # Show single card with same overlay style as yes/no
             render_tarot_overlay([card],["Upright"],"one")
             st.markdown(f"**Your Birth Card:** {card}")
             st.caption("This card never changes — it is your permanent soul archetype.")
-            render_post_generation(build_birth_card_prompt(card,str(st.session_state.bc_dob)))
+            
+            stream_ai_with_followup(build_birth_card_prompt(card,str(st.session_state.bc_dob)), "bc_chat", "Unlocking archetype...")
+            
             if st.button("🔄 Check Another Date",key="reset_bc"):
                 st.session_state.bc_revealed=False; st.rerun()
+                
     render_bottom_nav()
 
 # ═══════════════════════════════════════════════════════════
@@ -2111,6 +2296,7 @@ def show_numerology():
     components.html("""<script>setTimeout(function(){var b=window.parent.document.querySelector('button[aria-label="Collapse sidebar"]');if(b&&window.parent.innerWidth<=768)b.click();},80);</script>""",height=0,width=0)
     st.markdown("<h1>🔢 Numerology</h1>",unsafe_allow_html=True)
     tab1,tab2=st.tabs(["📊 Full Report","⭕ Personal Cycles & Pinnacles"])
+    
     with tab1:
         system=st.radio("System",["Western (Pythagorean)","Indian/Vedic (Chaldean)"],horizontal=True,key="num_sys")
         if "Chaldean" in system: st.caption("ℹ️ Chaldean system — authentic ancient tradition. Number 9 is sacred and not assigned to letters.")
@@ -2119,6 +2305,7 @@ def show_numerology():
         if mode=="Ask a Question": question=st.text_area("Your question",key="num_q",placeholder="e.g. When will my career take off?")
         use_astro=st.checkbox("🌌 Cross-validate with Vedic Kundli (maximum accuracy)",key="num_use_astro")
         dp,_=get_default_profile()
+        
         if use_astro:
             st.info("Name and DOB from the astrological profile will be used for numerology.")
             item=render_profile_form("num_prof",show_d60=True)
@@ -2126,23 +2313,32 @@ def show_numerology():
             c1,c2=st.columns(2)
             with c1: num_name=st.text_input("Full Birth Name",value=dp['name'] if dp else "",key="num_name")
             with c2: pre_dob=date.fromisoformat(dp['date']) if dp else date(2000,1,1); num_dob=st.date_input("Date of Birth",pre_dob,min_value=date(1850,1,1),max_value=date(2050,12,31),key="num_dob")
-        if st.button("Generate Numerology Prompt",type="primary",use_container_width=True):
+            
+        if st.button("Generate Numerology Report ✨",type="primary",use_container_width=True):
             if use_astro:
                 if item["type"]=="empty_saved": st.error("Select a saved profile."); return
                 prof,d60=resolve_profile(item); name=prof['name']; dob_str=prof['date']
             else:
                 if not num_name.strip(): st.error("Enter your name."); return
                 name=num_name.strip(); dob_str=num_dob.isoformat()
+                
             with st.spinner("Computing numbers..."):
                 lp,dest,soul,pers=calculate_numerology_core(name,dob_str,system)
                 user_tz=prof['tz'] if use_astro and 'tz' in prof else "Asia/Kolkata"
                 dossier=generate_astrology_dossier(prof,d60) if use_astro else None
+                
             c1,c2,c3,c4=st.columns(4)
             c1.metric("Life Path",f"{lp}{'★' if lp in [11,22,33] else ''}")
             c2.metric("Destiny",f"{dest}{'★' if dest in [11,22,33] else ''}")
             c3.metric("Soul Urge",f"{soul}{'★' if soul in [11,22,33] else ''}")
             c4.metric("Personality",f"{pers}{'★' if pers in [11,22,33] else ''}")
-            render_post_generation(build_numerology_prompt(name,dob_str,lp,dest,soul,pers,dossier,question,system))
+            
+            st.session_state.num_prompt = build_numerology_prompt(name,dob_str,lp,dest,soul,pers,dossier,question,system)
+            st.session_state.num_chat = [] # Clear memory for a fresh chat
+            
+        if "num_prompt" in st.session_state:
+            stream_ai_with_followup(st.session_state.num_prompt, "num_chat", "Analysing your numbers...")
+            
     with tab2:
         st.markdown("#### Personal Cycles & Pinnacle Challenges")
         st.caption("Understand the numerical timing of your life phases — including the obstacles built into each cycle.")
@@ -2150,17 +2346,20 @@ def show_numerology():
         c1,c2=st.columns(2)
         with c1: cyc_name=st.text_input("Full Birth Name",value=dp['name'] if dp else "",key="cyc_name")
         with c2: pre_dob=date.fromisoformat(dp['date']) if dp else date(2000,1,1); cyc_dob=st.date_input("Date of Birth",pre_dob,min_value=date(1850,1,1),max_value=date(2050,12,31),key="cyc_dob")
-        if st.button("Show My Cycles",type="primary",use_container_width=True):
+        
+        if st.button("Show My Cycles ✨",type="primary",use_container_width=True):
             if not cyc_name.strip(): st.error("Enter your name."); return
             lp,_,_,_=calculate_numerology_core(cyc_name.strip(),cyc_dob.isoformat(),sys3)
             user_tz=dp['tz'] if dp else "Asia/Kolkata"
             py=get_personal_year(cyc_dob.isoformat()); pm=get_personal_month(cyc_dob.isoformat(),user_tz); pd=get_personal_day(cyc_dob.isoformat(),user_tz)
             r1,r2,r3,r4=get_pinnacle_cycles(cyc_dob.isoformat()); y=cyc_dob.year
             cur_age=get_local_today(user_tz).year-y
+            
             st.markdown("#### Your Timing Numbers Today")
             c1,c2,c3=st.columns(3)
             c1.metric(f"Personal Year {get_local_today(user_tz).year}",str(py)); c1.caption(PERSONAL_YEAR_MEANINGS.get(py,''))
             c2.metric("Personal Month",str(pm)); c3.metric("Personal Day",str(pd))
+            
             st.markdown("#### Pinnacle Cycles & Challenges")
             for i,(s,e,n,c) in enumerate([r1,r2,r3,r4],1):
                 is_curr=s-y<=cur_age<e-y
@@ -2170,6 +2369,7 @@ def show_numerology():
                 col.markdown(f"**Pinnacle {i}** (Ages {s-y}–{e-y if e-y < 100 else '∞'}) &nbsp; {badge_html}", unsafe_allow_html=True)
                 col.write(f"**Pinnacle Number: {n}** — {PERSONAL_YEAR_MEANINGS.get(n,'')}")
                 col.write(f"**Challenge Number: {c}** — {'Master your need for control and ego.' if c==1 else 'Overcome fear of confrontation and indecision.' if c==2 else 'Build self-discipline to channel your emotions.' if c==3 else 'Learn to work within limitations patiently.' if c==4 else 'Ground your need for constant change and freedom.' if c==5 else 'Release perfectionism and learn to receive.' if c==6 else 'Trust yourself without constant external validation.' if c==7 else 'Balance material ambition with spiritual values.' if c==8 else 'Complete cycles; resist clinging to the past.' if c==9 else 'Own your spiritual sensitivity as a gift.'}")
+            
             is_vedic="Vedic" in sys3
             pdf_r=f"  {PDF_NUMEV}" if is_vedic else f"  {PDF_NUMEW1}\n  {PDF_NUMEW2}"
             prompt=f"""<instructions>
@@ -2195,7 +2395,12 @@ Explain:
 4. The currently active Challenge Number — what specific obstacle is the universe asking you to master?
 5. How the Pinnacle and Challenge work together as a push-pull dynamic
 </mission>"""
-            render_post_generation(prompt)
+            st.session_state.cyc_prompt = prompt
+            st.session_state.cyc_chat = []
+            
+        if "cyc_prompt" in st.session_state:
+            stream_ai_with_followup(st.session_state.cyc_prompt, "cyc_chat", "Interpreting life cycles...")
+            
     render_bottom_nav()
 
 # ═══════════════════════════════════════════════════════════
@@ -2362,6 +2567,17 @@ elif page=="Horoscopes":     show_horoscopes()
 elif page=="Numerology":     show_numerology()
 elif page=="Saved Profiles": show_vault()
 
-if st.session_state.get('needs_sync',False):
-    localS.setItem("kundli_vault",json.dumps(st.session_state.db))
-    st.session_state.needs_sync=False
+# ═══════════════════════════════════════════════════════════
+# ORIGINAL WORKING SYNC ENGINE (UNIQUE KEYS FIX)
+# ═══════════════════════════════════════════════════════════
+if st.session_state.get('needs_sync', False):
+    # Pass a unique key to the first save command
+    localS.setItem("kundli_vault", json.dumps(st.session_state.db), key="save_vault_data")
+    
+    # Pass a different unique key to the second save command
+    if st.session_state.default_profile_idx is not None:
+        localS.setItem("kundli_default", str(st.session_state.default_profile_idx), key="save_default_data")
+    else:
+        localS.setItem("kundli_default", "", key="clear_default_data")
+        
+    st.session_state.needs_sync = False
