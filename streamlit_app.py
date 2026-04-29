@@ -320,10 +320,18 @@ def generate_horoscope_text(sign,mode,date_val):
     return f"**General:** {rng.choice(g)}\n\n**Love & Relationships:** {rng.choice(l)}\n\n**Career & Finance:** {rng.choice(c)}"
 
 # ═══════════════════════════════════════════════════════════
-# The AI Engine Helper Function
+# The AI Engine Helper Function & Auto-Switcher
 # ═══════════════════════════════════════════════════════════
 
-def get_ai_model(system_prompt=None):
+# Verified active Free-Tier models for April 2026
+FREE_MODELS = [
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash"
+]
+
+def get_ai_model(system_prompt=None, model_idx=0):
     """Sets up the Gemini AI securely using your secret key."""
     api_key = st.secrets.get("GEMINI_API_KEY")
     if not api_key:
@@ -331,43 +339,79 @@ def get_ai_model(system_prompt=None):
         st.stop()
     
     genai.configure(api_key=api_key)
+    current_model = FREE_MODELS[model_idx % len(FREE_MODELS)]
     
-    # FIX: Updated to the newest free-tier Google model (Gemini 3 Flash)
     if system_prompt:
-        return genai.GenerativeModel('gemini-3-flash-preview', system_instruction=system_prompt)
+        return genai.GenerativeModel(current_model, system_instruction=system_prompt)
+    return genai.GenerativeModel(current_model)
+
+def generate_content_with_fallback(prompt, generation_config=None):
+    """Silently loops through free models if a 429 Quota error occurs."""
+    if "model_idx" not in st.session_state:
+        st.session_state.model_idx = 0
+        
+    attempts = 0
+    while attempts < len(FREE_MODELS):
+        try:
+            model = get_ai_model(model_idx=st.session_state.model_idx)
+            if generation_config:
+                return model.generate_content(prompt, generation_config=generation_config).text
+            return model.generate_content(prompt).text
+        except Exception as e:
+            err_str = str(e).lower()
+            if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
+                attempts += 1
+                st.session_state.model_idx = (st.session_state.model_idx + 1) % len(FREE_MODELS)
+            else:
+                raise e # Re-raise if it's a completely different API error (like invalid JSON request)
     
-    return genai.GenerativeModel('gemini-3-flash-preview')
+    raise Exception("All free models limits reached.")
 
 # ═══════════════════════════════════════════════════════════
 # THE UNIVERSAL AI CHAT ENGINE
 # ═══════════════════════════════════════════════════════════
 def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting..."):
-    """A universal component that streams AI text and handles follow-up chats."""
+    """A universal component that streams AI text and handles follow-up chats with automatic model switching."""
     st.markdown("---")
     st.markdown("### ✨ AI Reading")
     
-    model = get_ai_model()
+    if "model_idx" not in st.session_state:
+        st.session_state.model_idx = 0
     
     # 1. First run: Generate the main reading
     if memory_key not in st.session_state or len(st.session_state[memory_key]) == 0:
         st.session_state[memory_key] = []
-        chat = model.start_chat(history=[])
         
+        success = False
+        attempts = 0
         res_ph = st.empty()
-        f_res = ""
+        
         with st.spinner(spinner_text):
-            try:
-                response = chat.send_message(prompt, stream=True)
-                for chunk in response:
-                    f_res += chunk.text
-                    res_ph.markdown(f_res + "▌")
-                res_ph.markdown(f_res)
-                
-                # Save to memory
-                st.session_state[memory_key].append({"role": "user", "parts": [prompt]})
-                st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
-            except Exception as e:
-                st.error(f"API Error: {e}")
+            while not success and attempts < len(FREE_MODELS):
+                try:
+                    model = get_ai_model(model_idx=st.session_state.model_idx)
+                    chat = model.start_chat(history=[])
+                    response = chat.send_message(prompt, stream=True)
+                    f_res = ""
+                    for chunk in response:
+                        f_res += chunk.text
+                        res_ph.markdown(f_res + "▌")
+                    res_ph.markdown(f_res)
+                    
+                    st.session_state[memory_key].append({"role": "user", "parts": [prompt]})
+                    st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
+                    success = True
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
+                        attempts += 1
+                        st.session_state.model_idx = (st.session_state.model_idx + 1) % len(FREE_MODELS)
+                    else:
+                        st.error(f"API Error: {e}")
+                        return
+                        
+            if not success:
+                st.warning("⏳ The Astrologer is taking a breather (All Free Models Exhausted). Please wait a while, then try again!")
                 return
 
     # 2. Render existing chat history
@@ -385,18 +429,36 @@ def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting..."):
                 
             with st.chat_message("assistant"):
                 res_ph = st.empty()
-                f_res = ""
+                success = False
+                attempts = 0
+                
                 with st.spinner("Thinking..."):
-                    chat = model.start_chat(history=st.session_state[memory_key])
-                    res = chat.send_message(follow_up, stream=True)
-                    for chunk in res:
-                        f_res += chunk.text
-                        res_ph.markdown(f_res + "▌")
-                    res_ph.markdown(f_res)
-                    
-            st.session_state[memory_key].append({"role": "user", "parts": [follow_up]})
-            st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
-            st.rerun()
+                    while not success and attempts < len(FREE_MODELS):
+                        try:
+                            model = get_ai_model(model_idx=st.session_state.model_idx)
+                            chat = model.start_chat(history=st.session_state[memory_key])
+                            res = chat.send_message(follow_up, stream=True)
+                            f_res = ""
+                            for chunk in res:
+                                f_res += chunk.text
+                                res_ph.markdown(f_res + "▌")
+                            res_ph.markdown(f_res)
+                            
+                            st.session_state[memory_key].append({"role": "user", "parts": [follow_up]})
+                            st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
+                            st.rerun()
+                            success = True
+                        except Exception as e:
+                            err_str = str(e).lower()
+                            if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
+                                attempts += 1
+                                st.session_state.model_idx = (st.session_state.model_idx + 1) % len(FREE_MODELS)
+                            else:
+                                res_ph.error(f"API Error: {e}")
+                                break
+                                
+                    if not success:
+                        res_ph.error("⏳ The cosmic connection was interrupted (All Free Models Exhausted).")
 
 # ═══════════════════════════════════════════════════════════
 # ADVANCED ASTRO ENGINES
@@ -1714,10 +1776,13 @@ def calculate_tara_bala(natal_moon_lon, transit_moon_lon):
 def show_dashboard():
     if "dash_toggles" not in st.session_state:
         st.session_state.dash_toggles = {
+            "greeting": True,
+            "consult": True,
             "forecast": True,
             "decide": True,
             "calendar": True,
-            "tarot": True
+            "tarot": True,
+            "dasha_alert": True
         }
 
     # ───── STRICT PERSONAL OS LOGIC ─────
@@ -1740,29 +1805,128 @@ def show_dashboard():
         st.markdown(f"## 🧭 {prof['name'].split()[0]}'s Compass")
     with c2:
         with st.popover("⚙️"):
-            st.session_state.dash_toggles["forecast"] = st.checkbox("Forecast", value=st.session_state.dash_toggles["forecast"])
-            st.session_state.dash_toggles["decide"] = st.checkbox("Astro-Decide", value=st.session_state.dash_toggles["decide"])
-            st.session_state.dash_toggles["calendar"] = st.checkbox("Calendar", value=st.session_state.dash_toggles["calendar"])
-            st.session_state.dash_toggles["tarot"] = st.checkbox("Tarot", value=st.session_state.dash_toggles["tarot"])
+            # Using .get() prevents KeyError if the user already has an older session running
+            st.session_state.dash_toggles["greeting"] = st.checkbox("Daily Greeting", value=st.session_state.dash_toggles.get("greeting", True))
+            st.session_state.dash_toggles["consult"] = st.checkbox("Consultation Room", value=st.session_state.dash_toggles.get("consult", True))
+            st.session_state.dash_toggles["forecast"] = st.checkbox("Forecast", value=st.session_state.dash_toggles.get("forecast", True))
+            st.session_state.dash_toggles["decide"] = st.checkbox("Astro-Decide", value=st.session_state.dash_toggles.get("decide", True))
+            st.session_state.dash_toggles["calendar"] = st.checkbox("Calendar", value=st.session_state.dash_toggles.get("calendar", True))
+            st.session_state.dash_toggles["tarot"] = st.checkbox("Tarot", value=st.session_state.dash_toggles.get("tarot", True))
+            st.session_state.dash_toggles["dasha_alert"] = st.checkbox("Dasha Shift Alerts", value=st.session_state.dash_toggles.get("dasha_alert", True))
 
     st.markdown("---")
-    
-    # ... [The rest of your code (Forecast Cards, Astro-Decide, etc.) remains exactly the same below this line!] ...
 
-    # ───── 10-SECOND FORECAST CARDS ─────
+    # ───── DASHBOARD CONSULTATION CARD (WITH LIVE PREVIEW) ─────
+    if st.session_state.dash_toggles.get("consult", True):
+        memory_key = f"consult_chat_{prof['name']}"
+        last_msg = "Ask any question about your life, timing, or planetary energies."
+        
+        # Check if a chat exists and grab the Astrologer's last message
+        if memory_key in st.session_state and len(st.session_state[memory_key]) > 0:
+            for msg in reversed(st.session_state[memory_key]):
+                if msg["role"] == "model":
+                    last_msg = msg["parts"][0][:100] + "..." # Truncate it nicely
+                    break
+
+        st.markdown(f"""
+        <div style='background:linear-gradient(135deg, rgba(144,98,222,0.15), rgba(205,140,80,0.1)); border:1px solid rgba(144,98,222,0.3); border-radius:12px; padding:1.2rem; margin-bottom:1rem;'>
+            <h3 style='margin:0 0 0.3rem 0; font-size:1.1rem; color:#fff;'>💬 Ask the Astrologer</h3>
+            <p style='margin:0 0 0.8rem 0; font-size:0.85rem; color:#cd8c50;'><em>"{last_msg}"</em></p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if st.button("Enter Consultation Room →", use_container_width=True):
+            st.session_state.nav_page = "Consultation Room"
+            st.rerun()
+        st.markdown("<br>", unsafe_allow_html=True)
+
+    # ───── TODAY FOR [NAME] (AUTO-GENERATED GREETING) ─────
+    if st.session_state.dash_toggles.get("greeting", True):
+        greet_cache_key = f"daily_greet_{active_idx}_{today_str}"
+        
+        if greet_cache_key not in st.session_state:
+            with st.spinner("Reading the stars for you..."):
+                try:
+                    dos = generate_astrology_dossier(prof, False, compact=True)
+                    transits = get_gochara_overlay(prof)
+                    greet_prompt = f"""<instructions>You are an elite Vedic astrologer. Write exactly ONE short, personalized paragraph (2 sentences max) for {prof['name']} based on today's Gochara (transits) against their Vedic Kundli. Use STRICTLY Indian astrology principles (Parashari/KP) — mention the specific Nakshatra, Dasha, or House activation. Focus on the single most important planetary movement today. Keep it punchy, insightful, and practical. DO NOT use Western astrology concepts. DO NOT use markdown formatting. DO NOT say 'Hello' or start with a greeting.</instructions>
+                    <data>{transits}\n{dos}</data>"""
+                    
+                    res = get_ai_model().generate_content(greet_prompt).text
+                    st.session_state[greet_cache_key] = res.strip()
+                except Exception as e:
+                    # SAFETY NET
+                    st.session_state[greet_cache_key] = f"Welcome back, {prof['name'].split()[0]}. The cosmic connection is catching its breath, but your tools are ready below."
+        
+        if greet_cache_key in st.session_state:
+            st.markdown(f"""
+            <div style="padding-left: 14px; border-left: 4px solid #9062de; margin-bottom: 1.5rem;">
+                <p style="font-size: 1.05rem; font-weight: 500; color: #e2e0ec; margin: 0; line-height: 1.5;">
+                    {st.session_state[greet_cache_key]}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # ───── 7 DAY CALENDAR (MOVED TO TOP) ─────
+    if st.session_state.dash_toggles["calendar"]:
+        st.markdown("### 📅 Your Cosmic Week")
+        st.caption("Your personalized weather based on your Moon sign. 🟢 Green = Go, 🔴 Red = Lay low.")
+        now = datetime.now(ZoneInfo(tz))
+        prof_date = date.fromisoformat(prof['date'])
+        prof_time = datetime.strptime(prof['time'], "%H:%M").time()
+
+        jd_natal, _, _ = local_to_julian_day(prof_date, prof_time, tz)
+        natal_moon = swe.calc_ut(jd_natal, swe.MOON)[0][0]
+
+        html = '<div style="display:flex; gap:8px; overflow-x:auto; padding-bottom:10px;">'
+        todays_advice = ""
+
+        for i in range(7):
+            d = now + timedelta(days=i)
+            utc_d = d.astimezone(ZoneInfo("UTC"))
+            jd = swe.julday(utc_d.year, utc_d.month, utc_d.day, 12.0)
+            
+            moon = swe.calc_ut(jd, swe.MOON)[0][0]
+            tara = calculate_tara_bala(natal_moon, moon)
+
+            is_today = (i == 0)
+            if is_today:
+                todays_advice = f"**Today's Focus ({tara['tara'].split(' ')[0]}):** {tara['advice']}"
+
+            bg = "rgba(144,98,222,0.2)" if is_today else "rgba(255,255,255,0.05)"
+            border = "border: 1px solid #9062de;" if is_today else "border: 1px solid rgba(255,255,255,0.1);"
+            
+            # Extract the first sentence of the advice to act as a 1-line theme
+            theme = tara['advice'].split('.')[0] + '.'
+
+            html += f"""<div style="min-width:150px; padding:12px; border-radius:10px; background:{bg}; {border} text-align:center; flex-shrink:0; display:flex; flex-direction:column; justify-content:space-between;">
+<div>
+    <div style="font-size:0.75rem; color:#beb9cd; font-weight:bold; letter-spacing:0.5px;">{'TODAY' if is_today else d.strftime('%a, %b %d').upper()}</div>
+    <div style="font-size:1.4rem; margin:6px 0;">{tara['color'].split(' ')[0]}</div>
+    <div style="font-size:0.85rem; color:#fff; font-weight:600;">{tara['tara'].split(' ')[0]}</div>
+</div>
+<div style="font-size:0.68rem; color:rgba(255,255,255,0.65); margin-top:8px; line-height:1.4;">{theme}</div>
+</div>"""
+
+        html += "</div>"
+        st.markdown(html, unsafe_allow_html=True)
+        st.info(todays_advice)
+        st.markdown("<br>", unsafe_allow_html=True)
+
+# ───── 10-SECOND FORECAST CARDS (AUTO-LOAD) ─────
     if st.session_state.dash_toggles["forecast"]:
         st.markdown("### 📡 Today's Energy")
 
         cache_key = f"forecast_{active_idx}_{today_str}"
 
         if cache_key not in st.session_state:
-            if st.button("Generate Today's Forecast ⚡", use_container_width=True):
-                with st.spinner("Calculating cosmic weather..."):
+            with st.spinner("Calculating your cosmic weather for today..."):
+                try:
                     dos = generate_astrology_dossier(prof, False, compact=True)
                     transits = get_gochara_overlay(prof)
-
                     prompt = build_forecast_cards_prompt(dos, transits)
-                    res = get_ai_model().generate_content(prompt).text
+                    
+                    res = generate_content_with_fallback(prompt)
 
                     st.session_state[cache_key] = safe_json(res, {
                         "ENERGY": "Mixed",
@@ -1771,7 +1935,16 @@ def show_dashboard():
                         "WINDOW": "Anytime",
                         "SUMMARY": "Balanced day. Stick to your routines."
                     })
-                    st.rerun()
+                except Exception as e:
+                    # SAFETY NET: If all 4 models hit a speed limit
+                    st.session_state[cache_key] = {
+                        "ENERGY": "Resting",
+                        "FOCUS": "Patience",
+                        "CAUTION": "Rushing",
+                        "WINDOW": "Later",
+                        "SUMMARY": "The stars are quiet right now (All Free Models Exhausted). Try asking Astro-Decide in a minute!"
+                    }
+                st.rerun()
 
         if cache_key in st.session_state:
             data = st.session_state[cache_key]
@@ -1796,68 +1969,59 @@ def show_dashboard():
             </div>
             """, unsafe_allow_html=True)
             st.caption(data.get("SUMMARY", ""))
-            
-    # ───── ASTRO DECIDE ─────
+      
+      
+    # ───── ASTRO DECIDE (POLISHED UX + CLEAR BUTTON) ─────
     if st.session_state.dash_toggles["decide"]:
         st.markdown("### ⚖️ Astro-Decide")
-        q = st.text_input("What do you need to decide right now?", placeholder="e.g. Should I push the launch to tomorrow?")
+        
+        # Tie the input to session state so we can clear it
+        q = st.text_input("What do you need to decide right now?", key="astro_decide_q", placeholder="e.g. Should I sign this contract today?")
 
-        if st.button("Decide", type="primary", use_container_width=True):
+        # Add two buttons side-by-side
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            decide_btn = st.button("Decide", type="primary", use_container_width=True)
+        with c2:
+            if st.button("Clear", use_container_width=True):
+                st.session_state.astro_decide_q = ""
+                if "astro_decide_result" in st.session_state:
+                    del st.session_state.astro_decide_result
+                st.rerun()
+
+        if decide_btn:
             if not q.strip():
                 st.warning("Ask something first.")
             else:
-                with st.spinner("Analyzing..."):
-                    dos = generate_astrology_dossier(prof, False, compact=True)
-                    transits = get_gochara_overlay(prof)
+                with st.spinner("Consulting the transits..."):
+                    try:
+                        dos = generate_astrology_dossier(prof, False, compact=True)
+                        transits = get_gochara_overlay(prof)
+                        prompt = build_astro_decide_prompt(dos, transits, q)
+                        
+                        res = generate_content_with_fallback(prompt)
+                        
+                        # Save the actual result to session state so it persists
+                        st.session_state.astro_decide_result = safe_json(res, {
+                            "VERDICT": "WAIT",
+                            "WHY": "Cosmic signals are unclear right now.",
+                            "ALTERNATIVE": "Delay action until tomorrow."
+                        })
+                    except Exception as e:
+                        # SAFETY NET: If all free models are exhausted
+                        st.session_state.astro_decide_result = {
+                            "VERDICT": "RESTING",
+                            "WHY": "The cosmic connection is busy right now (All Free Models Exhausted).",
+                            "ALTERNATIVE": "Give it a few minutes and try again!"
+                        }
+        # Render the result if it exists in session state
+        if "astro_decide_result" in st.session_state:
+            out = st.session_state.astro_decide_result
+            with st.container(border=True):
+                st.markdown(f"### 🔮 Verdict: {out.get('VERDICT', 'WAIT')}")
+                st.markdown(f"**Why:** {out.get('WHY', '')}")
+                st.markdown(f"*{out.get('ALTERNATIVE', '')}*")
 
-                    prompt = build_astro_decide_prompt(dos, transits, q)
-                    res = get_ai_model().generate_content(prompt).text
-
-                    out = safe_json(res, {
-                        "VERDICT": "WAIT",
-                        "WHY": "Cosmic signals are unclear right now.",
-                        "ALTERNATIVE": "Delay action until tomorrow."
-                    })
-
-                    st.success(out.get("VERDICT", "WAIT"))
-                    st.write(out.get("WHY", ""))
-                    st.caption(out.get("ALTERNATIVE", ""))
-
-    # ───── 7 DAY CALENDAR ─────
-    if st.session_state.dash_toggles["calendar"]:
-        st.markdown("### 📅 Next 7 Days")
-        st.caption("Your personalized cosmic weather forecast based on your Moon sign. Use this to plan your week at a glance: 🟢 Green means push forward, 🔴 Red means lay low.")
-        now = datetime.now(ZoneInfo(tz))
-        prof_date = date.fromisoformat(prof['date'])
-        prof_time = datetime.strptime(prof['time'], "%H:%M").time()
-
-        jd_natal, _, _ = local_to_julian_day(prof_date, prof_time, tz)
-        natal_moon = swe.calc_ut(jd_natal, swe.MOON)[0][0]
-
-        html = '<div style="display:flex; gap:8px; overflow-x:auto; padding-bottom:10px;">'
-
-        for i in range(7):
-            d = now + timedelta(days=i)
-            utc_d = d.astimezone(ZoneInfo("UTC"))
-            jd = swe.julday(utc_d.year, utc_d.month, utc_d.day, 12.0)
-            
-            moon = swe.calc_ut(jd, swe.MOON)[0][0]
-            tara = calculate_tara_bala(natal_moon, moon)
-
-            is_today = (i == 0)
-            bg = "rgba(144,98,222,0.2)" if is_today else "rgba(255,255,255,0.05)"
-            border = "border: 1px solid #9062de;" if is_today else "border: 1px solid rgba(255,255,255,0.1);"
-
-# NO INDENTATION below to prevent Markdown code blocks!
-            html += f"""<div style="min-width:100px; padding:10px; border-radius:10px; background:{bg}; {border} text-align:center; flex-shrink:0;">
-<div style="font-size:0.75rem; color:#beb9cd; font-weight:bold;">{'TODAY' if is_today else d.strftime('%a')}</div>
-<div style="font-size:1.2rem; margin:5px 0;">{tara['color'].split(' ')[0]}</div>
-<div style="font-size:0.75rem; color:#fff;">{tara['tara'].split(' ')[0]}</div>
-<div style="font-size:0.65rem; color:rgba(255,255,255,0.5); margin-top:3px;">{tara['status']}</div>
-</div>"""
-
-        html += "</div>"
-        st.markdown(html, unsafe_allow_html=True)
 
 # ───── DAILY TAROT ─────
     if st.session_state.dash_toggles.get("tarot", False):
@@ -1950,7 +2114,11 @@ def show_dashboard():
                             "MANTRA": "A short, powerful affirmation."
                         }"""
                         
-                        res = get_ai_model().generate_content(json_prompt).text
+                        try:
+                            res = generate_content_with_fallback(json_prompt)
+                        except Exception:
+                            res = "{}"
+                            
                         st.session_state[cache_key_tarot] = safe_json(res, {
                             "MEANING": "Trust the process unfolding today.",
                             "ACTION": "Observe before making any sudden moves.",
@@ -1959,23 +2127,6 @@ def show_dashboard():
                         st.rerun()
             
             if is_revealed:
-                fx_key = f"fx_played_{cache_key_tarot}"
-                if not st.session_state.get(fx_key, False):
-                    st.session_state[fx_key] = True
-                    # PROPER way to run JS in Streamlit
-                    import streamlit.components.v1 as components
-                    components.html("""
-                    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
-                    <script>
-                        setTimeout(() => {
-                            confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: ['#cd8c50', '#9062de', '#ffffff'] });
-                            const audio = new Audio("https://actions.google.com/sounds/v1/magic/magic_chime.ogg");
-                            audio.volume = 0.5;
-                            audio.play().catch(e => console.log("Audio blocked by browser."));
-                        }, 300);
-                    </script>
-                    """, height=0)
-
                 t_data = st.session_state[cache_key_tarot]
                 st.markdown(f"""
                 <div style="background:rgba(255,255,255,0.03); padding:15px; border-radius:10px; border:1px solid rgba(255,255,255,0.08); height:100%;">
@@ -1984,6 +2135,57 @@ def show_dashboard():
                     <p style="margin:0; font-size:0.85rem;"><b style="color:#cd8c50;">Mantra:</b> <i style="color:#e0d8f0;">"{t_data.get('MANTRA', '')}"</i></p>
                 </div>
                 """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ───── DASHA SHIFT ALERTS (MOVED TO BOTTOM) ─────
+    if st.session_state.dash_toggles.get("dasha_alert", True):
+        now_dt = datetime.now(ZoneInfo(tz))
+        today_date = now_dt.date()
+        p_date = date.fromisoformat(prof['date']) if isinstance(prof['date'], str) else prof['date']
+        p_time = datetime.strptime(prof['time'], "%H:%M").time() if isinstance(prof['time'], str) else prof['time']
+        
+        jd_nat, dt_loc, _ = local_to_julian_day(p_date, p_time, tz)
+        m_lon, _ = get_planet_longitude_and_speed(jd_nat, PLANETS["Moon"])
+        
+        d_info = build_vimshottari_timeline(dt_loc, m_lon, now_dt)
+        
+        ad_days = (d_info['ad_end'].astimezone(ZoneInfo(tz)).date() - today_date).days
+        pd_days = (d_info['pd_end'].astimezone(ZoneInfo(tz)).date() - today_date).days
+        
+        themes = {
+            "Sun": "authority, soul-searching, and visibility", "Moon": "emotional shifts and deep changes",
+            "Mars": "action, drive, and potential friction", "Rahu": "ambition, obsession, and sudden events",
+            "Jupiter": "expansion, wisdom, and opportunities", "Saturn": "discipline, structure, and hard work",
+            "Mercury": "intellect, communication, and business", "Ketu": "detachment, endings, and spirituality",
+            "Venus": "relationships, comfort, and harmony", "Unknown": "shifting cosmic energies"
+        }
+        
+        try:
+            nxt_ad = DASHA_ORDER[(DASHA_ORDER.index(d_info['current_ad']) + 1) % 9]
+            nxt_pd = DASHA_ORDER[(DASHA_ORDER.index(d_info['current_pd']) + 1) % 9]
+        except:
+            nxt_ad, nxt_pd = "Unknown", "Unknown"
+            
+        if 0 <= ad_days <= 45:
+            a_title = f"⚠️ Major Chapter Shift in {ad_days} Days"
+            a_text = f"Your Antardasha is shifting from **{d_info['current_ad']}** to **{nxt_ad}**. Prepare for a major life theme shift towards {themes.get(nxt_ad, 'new paths')}."
+            b_color = "#e74c3c"
+        elif 0 <= pd_days <= 14:
+            a_title = f"⏱️ Minor Energy Shift in {pd_days} Days"
+            a_text = f"Your Pratyantar Dasha shifts from **{d_info['current_pd']}** to **{nxt_pd}**. Expect a brief pivot towards {themes.get(nxt_pd, 'new paths')}."
+            b_color = "#cd8c50"
+        else:
+            a_title = f"⏳ Current Phase: {d_info['current_ad']} Antardasha"
+            a_text = f"You are deep in your **{d_info['current_md']}** Mahadasha and **{d_info['current_ad']}** Antardasha. The next major shift is {ad_days} days away."
+            b_color = "rgba(255,255,255,0.08)"
+
+        st.markdown(f"""
+        <div style="padding: 14px 18px; border-radius: 12px; background: rgba(0,0,0,0.2); border: 1px solid {b_color}; margin-bottom: 1.5rem; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+            <p style="margin: 0 0 4px 0; font-size: 0.80rem; color: {b_color if b_color != 'rgba(255,255,255,0.08)' else '#beb9cd'}; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px;">{a_title}</p>
+            <p style="margin: 0; font-size: 0.95rem; color: #e2e0ec; line-height: 1.5;">{a_text}</p>
+        </div>
+        """, unsafe_allow_html=True)
 
     render_bottom_nav()
 
