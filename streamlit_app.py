@@ -1501,11 +1501,13 @@ div[data-testid="stButton"]>button:not([kind="primary"]):hover{background:rgba(2
 @media(max-width:768px){.bottom-nav{display:block}.block-container{padding-bottom:6rem!important}}
 
 /* ── Bottom nav dropup (mobile only) ── */
+#more-toggle { display: none; } /* Hidden checkbox for the pure CSS toggle */
+
 .bnav-dropup {
     display: none;
     position: absolute;
     bottom: calc(100% + 15px);
-    right: 15px;
+    right: 10px;
     background: rgba(8,4,20,0.97);
     backdrop-filter: blur(20px);
     border: 1px solid rgba(144,98,222,0.3);
@@ -1514,17 +1516,21 @@ div[data-testid="stButton"]>button:not([kind="primary"]):hover{background:rgba(2
     flex-direction: column;
     gap: 2px;
     box-shadow: 0 -8px 25px rgba(0,0,0,0.6);
-    z-index: 10000;
+    z-index: 10001;
     min-width: 160px;
 }
-.bnav-dropup.show {
+
+/* Show menu when checkbox is checked */
+#more-toggle:checked ~ .bnav-dropup {
     display: flex;
     animation: slideUp 0.2s ease-out forwards;
 }
+
 @keyframes slideUp {
     from { opacity: 0; transform: translateY(15px); }
     to { opacity: 1; transform: translateY(0); }
 }
+
 .dropup-item {
     color: rgba(200,195,220,0.7);
     text-decoration: none;
@@ -1540,6 +1546,26 @@ div[data-testid="stButton"]>button:not([kind="primary"]):hover{background:rgba(2
 .dropup-item:hover, .dropup-item.active {
     color: #c090e0;
     background: rgba(144,98,222,0.12);
+}
+
+/* Style for the More label to look like a button */
+.more-label {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 4px 8px; background: none; border: none; cursor: pointer;
+    color: rgba(200,195,220,0.5); font-family: 'Inter', sans-serif;
+    font-size: .65rem; font-weight: 500; min-width: 52px; border-radius: 8px;
+    transition: all .2s; margin: 0;
+}
+.more-label:hover, #more-toggle:checked + .more-label, .more-label.active {
+    color: #c090e0; background: rgba(144,98,222,0.12);
+}
+
+/* Invisible overlay to close menu when clicking outside */
+.dropup-overlay {
+    display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 10000;
+}
+#more-toggle:checked ~ .dropup-overlay {
+    display: block;
 }
 </style>""", unsafe_allow_html=True)
 
@@ -1592,7 +1618,8 @@ def render_bottom_nav():
                 ("🔢","Numerology","Numerology"),
                 ("📖","Profiles","Saved Profiles")]
 
-    nav_html='<div class="bottom-nav" style="position:relative;"><div class="bottom-nav-inner">'
+    # Outer container remains FIXED. Inner container is RELATIVE.
+    nav_html='<div class="bottom-nav"><div class="bottom-nav-inner" style="position:relative;">'
     
     # 1. Main Navigation Buttons
     for icon,label,page in main_items:
@@ -1600,12 +1627,21 @@ def render_bottom_nav():
         safe_url = page.replace(" ", "%20")
         nav_html+=f'<a class="bnav-btn {active}" target="_self" href="?p={safe_url}" title="{label}"><span class="bnav-icon">{icon}</span><span>{label}</span></a>'
         
-    # 2. "More" Button
+    # 2. "More" Button (Using a hidden checkbox & label toggle)
     more_active="active" if st.session_state.nav_page in ["Horoscopes", "Numerology", "Saved Profiles"] else ""
-    nav_html+=f'<button class="bnav-btn {more_active}" onclick="document.getElementById(\'moreDropup\').classList.toggle(\'show\')" title="More"><span class="bnav-icon">☰</span><span>More</span></button>'
+    nav_html+=f'''
+    <input type="checkbox" id="more-toggle">
+    <label for="more-toggle" class="more-label {more_active}" title="More">
+        <span class="bnav-icon">☰</span>
+        <span>More</span>
+    </label>
+    '''
     
-    # 3. The Drop-up Menu
-    nav_html+='<div class="bnav-dropup" id="moreDropup">'
+    # 3. Invisible background overlay (closes the menu if you tap anywhere else)
+    nav_html+='<label for="more-toggle" class="dropup-overlay"></label>'
+    
+    # 4. The Drop-up Menu
+    nav_html+='<div class="bnav-dropup">'
     for icon,label,page in more_items:
         active="active" if st.session_state.nav_page==page else ""
         safe_url = page.replace(" ", "%20")
@@ -1613,25 +1649,6 @@ def render_bottom_nav():
     nav_html+='</div>'
     
     nav_html+='</div></div>'
-
-    # 4. JavaScript to close the menu if the user taps anywhere outside of it
-    nav_html+='''<script>
-    document.addEventListener('click', function(event) {
-        var dropup = document.getElementById('moreDropup');
-        var isClickInside = false;
-        
-        // Check if click was inside dropup or on any "More" button
-        if (dropup && dropup.contains(event.target)) isClickInside = true;
-        document.querySelectorAll('button[title="More"]').forEach(btn => {
-            if (btn.contains(event.target)) isClickInside = true;
-        });
-        
-        // Hide if clicked outside
-        if (!isClickInside && dropup && dropup.classList.contains('show')) {
-            dropup.classList.remove('show');
-        }
-    });
-    </script>'''
 
     st.markdown(nav_html,unsafe_allow_html=True)
 
@@ -1873,7 +1890,6 @@ def show_dashboard():
     if not dp:
         st.markdown("## 🧭 The Cosmic Compass")
         st.info("💡 Welcome! Go to **Saved Profiles** and tap the ⭐ next to your name to set up your personal dashboard.")
-        render_bottom_nav()
         return
 
     # Keep the profile data loaded
@@ -2269,7 +2285,6 @@ def show_dashboard():
         </div>
         """, unsafe_allow_html=True)
 
-    render_bottom_nav()
 
 # ═══════════════════════════════════════════════════════════
 # CONSULTATION ROOM (Global Chat)
@@ -2311,8 +2326,6 @@ def show_consultation_room():
     if f"consult_prompt_{dp['name']}" in st.session_state:
         # The engine hides the massive prompt and only shows the AI's greeting, then opens the chat box!
         stream_ai_with_followup(st.session_state[f"consult_prompt_{dp['name']}"], memory_key, "Taking a seat at the table...")
-        
-    render_bottom_nav()
     
 # ═══════════════════════════════════════════════════════════
 # ORACLE
@@ -2475,7 +2488,6 @@ def _run_oracle(mission):
         else:
             stream_ai_with_followup(st.session_state[f"oracle_prompt_{mission}"], f"oracle_{mission}_history", "The Oracle is channeling the stars...")
 
-    render_bottom_nav()
 
 # ═══════════════════════════════════════════════════════════
 # TAROT — Fully rewritten with working animations, all modes
@@ -2591,7 +2603,6 @@ def show_tarot():
             if st.button("🔄 Check Another Date",key="reset_bc"):
                 st.session_state.bc_revealed=False; st.rerun()
                 
-    render_bottom_nav()
 
 # ═══════════════════════════════════════════════════════════
 # HOROSCOPES
@@ -2625,7 +2636,6 @@ def show_horoscopes():
                 with pt1: st.write(generate_horoscope_text(sign_n,"DV",today.isoformat()))
                 with pt2: st.write(generate_horoscope_text(sign_n,"MV",f"{today.year}-{today.month}"))
                 with pt3: st.write(generate_horoscope_text(sign_n,"YV",f"{today.year}"))
-    render_bottom_nav()
 
 # ═══════════════════════════════════════════════════════════
 # NUMEROLOGY
@@ -2739,7 +2749,6 @@ Explain:
         if "cyc_prompt" in st.session_state:
             stream_ai_with_followup(st.session_state.cyc_prompt, "cyc_chat", "Interpreting life cycles...")
             
-    render_bottom_nav()
 
 # ═══════════════════════════════════════════════════════════
 # SAVED PROFILES / VAULT
@@ -2888,17 +2897,18 @@ def show_vault():
                     st.session_state.db=imp; sync_db(); st.success("Imported."); time_module.sleep(.5); st.rerun()
                 else: st.error("Invalid format.")
             except Exception as e: st.error(f"Invalid file: {e}")
-    render_bottom_nav()
+
 
 # ═══════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════
 inject_nebula_css()
 render_sidebar()
+render_bottom_nav()  # <--- MOVED HERE SO IT LOADS INSTANTLY!
 
 page=st.session_state.nav_page
 if   page=="Dashboard":      show_dashboard()
-elif page=="Consultation Room": show_consultation_room() # <-- ADDED THIS
+elif page=="Consultation Room": show_consultation_room() 
 elif page=="The Oracle":     show_oracle()
 elif page=="Mystic Tarot":   show_tarot()
 elif page=="Horoscopes":     show_horoscopes()
