@@ -114,7 +114,7 @@ PDF_TGUIDE=f"{PDF_BASE}tguide.pdf"
 PDF_NUMEW1=f"{PDF_BASE}numeguide1.pdf"; PDF_NUMEW2=f"{PDF_BASE}numeguide2.pdf"
 PDF_NUMEV=f"{PDF_BASE}vedicnume.pdf"
 TAROT_BASE="https://raw.githubusercontent.com/hinshalll/text2kprompt/main/tarot/"
-NAV_PAGES=["Dashboard","The Oracle","Mystic Tarot","Horoscopes","Numerology","Saved Profiles"]
+NAV_PAGES=["Dashboard", "Consultation Room", "The Oracle", "Mystic Tarot", "Horoscopes", "Numerology", "Saved Profiles"]
 
 # ═══════════════════════════════════════════════════════════
 # SESSION STATE & QUERY PARAMS (navigation)
@@ -1499,6 +1499,48 @@ div[data-testid="stButton"]>button:not([kind="primary"]):hover{background:rgba(2
 .bnav-btn.active,.bnav-btn:hover{color:#c090e0;background:rgba(144,98,222,0.12)}
 .bnav-icon{font-size:1.35rem;line-height:1}
 @media(max-width:768px){.bottom-nav{display:block}.block-container{padding-bottom:6rem!important}}
+
+/* ── Bottom nav dropup (mobile only) ── */
+.bnav-dropup {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 15px);
+    right: 15px;
+    background: rgba(8,4,20,0.97);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(144,98,222,0.3);
+    border-radius: 12px;
+    padding: 8px 0;
+    flex-direction: column;
+    gap: 2px;
+    box-shadow: 0 -8px 25px rgba(0,0,0,0.6);
+    z-index: 10000;
+    min-width: 160px;
+}
+.bnav-dropup.show {
+    display: flex;
+    animation: slideUp 0.2s ease-out forwards;
+}
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(15px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.dropup-item {
+    color: rgba(200,195,220,0.7);
+    text-decoration: none;
+    padding: 12px 18px;
+    font-size: 0.88rem;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transition: all 0.2s;
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+}
+.dropup-item:hover, .dropup-item.active {
+    color: #c090e0;
+    background: rgba(144,98,222,0.12);
+}
 </style>""", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════
@@ -1541,16 +1583,56 @@ def render_post_generation(prompt):
 # BOTTOM NAV (mobile, functional via query params)
 # ═══════════════════════════════════════════════════════════
 def render_bottom_nav():
-    items=[("🌌","Home","Dashboard"),
-           ("💬","Chat","Consultation Room"), # <-- ADDED THIS
-           ("🔮","Oracle","The Oracle"),
-           ("🃏","Tarot","Mystic Tarot"),
-           ("👤","Profiles","Saved Profiles")]
-    nav_html='<div class="bottom-nav"><div class="bottom-nav-inner">'
-    for icon,label,page in items:
+    main_items=[("🌌","Home","Dashboard"),
+                ("💬","Chat","Consultation Room"),
+                ("🔮","Oracle","The Oracle"),
+                ("🃏","Tarot","Mystic Tarot")]
+                
+    more_items=[("🌟","Horoscopes","Horoscopes"),
+                ("🔢","Numerology","Numerology"),
+                ("📖","Profiles","Saved Profiles")]
+
+    nav_html='<div class="bottom-nav" style="position:relative;"><div class="bottom-nav-inner">'
+    
+    # 1. Main Navigation Buttons
+    for icon,label,page in main_items:
         active="active" if st.session_state.nav_page==page else ""
-        nav_html+=f'<a class="bnav-btn {active}" href="?p={page}" title="{label}"><span class="bnav-icon">{icon}</span><span>{label}</span></a>'
+        safe_url = page.replace(" ", "%20")
+        nav_html+=f'<a class="bnav-btn {active}" target="_self" href="?p={safe_url}" title="{label}"><span class="bnav-icon">{icon}</span><span>{label}</span></a>'
+        
+    # 2. "More" Button
+    more_active="active" if st.session_state.nav_page in ["Horoscopes", "Numerology", "Saved Profiles"] else ""
+    nav_html+=f'<button class="bnav-btn {more_active}" onclick="document.getElementById(\'moreDropup\').classList.toggle(\'show\')" title="More"><span class="bnav-icon">☰</span><span>More</span></button>'
+    
+    # 3. The Drop-up Menu
+    nav_html+='<div class="bnav-dropup" id="moreDropup">'
+    for icon,label,page in more_items:
+        active="active" if st.session_state.nav_page==page else ""
+        safe_url = page.replace(" ", "%20")
+        nav_html+=f'<a class="dropup-item {active}" target="_self" href="?p={safe_url}"><span class="bnav-icon" style="font-size:1.2rem;">{icon}</span><span>{label}</span></a>'
+    nav_html+='</div>'
+    
     nav_html+='</div></div>'
+
+    # 4. JavaScript to close the menu if the user taps anywhere outside of it
+    nav_html+='''<script>
+    document.addEventListener('click', function(event) {
+        var dropup = document.getElementById('moreDropup');
+        var isClickInside = false;
+        
+        // Check if click was inside dropup or on any "More" button
+        if (dropup && dropup.contains(event.target)) isClickInside = true;
+        document.querySelectorAll('button[title="More"]').forEach(btn => {
+            if (btn.contains(event.target)) isClickInside = true;
+        });
+        
+        // Hide if clicked outside
+        if (!isClickInside && dropup && dropup.classList.contains('show')) {
+            dropup.classList.remove('show');
+        }
+    });
+    </script>'''
+
     st.markdown(nav_html,unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════
