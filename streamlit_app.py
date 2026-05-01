@@ -1171,6 +1171,13 @@ def build_deep_analysis_prompt(dossier):
 <mission>
 Deliver a complete, deeply insightful life reading. Each section MUST cite specific data from the chart.
 
+<KNOWLEDGE_ROUTING>
+- Use bphs1.md ONLY for the foundational personality, planetary dignity, and house descriptions.
+- Use bphs2.md ONLY for the Vimshottari Dasha timeline and transit timing rules.
+- Use kp3.md ONLY for the Sub-Lord results and specific KP significations.
+- Use iva.md to synthesize this data into a modern, human-like psychological narrative.
+</KNOWLEDGE_ROUTING>
+
 ## 1. Core Identity & Lagna
    DATA: Ascendant, Lagna Lord Chain, Functional Planets, H1 occupants.
    PARASHARI: Personality, constitution, life approach.
@@ -1215,6 +1222,12 @@ def build_matchmaking_prompt(dos_a,dos_b,koota,manglik_canc):
 <mission>
 Definitive compatibility analysis. Follow these sections exactly:
 
+<KNOWLEDGE_ROUTING>
+- Use bphs1.md for basic synastry, planetary friendship, and character alignment.
+- Use bphs2.md EXCLUSIVELY to check their Dasha timelines for marriage timing alignment.
+- Use iva.md to synthesize their relationship dynamics into a modern psychological narrative.
+</KNOWLEDGE_ROUTING>
+
 ## 1. Ashta Koota Guna Milan
    CRITICAL: Do NOT recalculate. Use this pre-computed result exactly:
    {koota}
@@ -1255,6 +1268,12 @@ def build_comparison_prompt(profiles_dossiers,criteria):
 Compare the following individuals on these parameters:
 {criteria_str}
 
+<KNOWLEDGE_ROUTING>
+- Use bphs1.md for foundational traits and house strengths.
+- Use kp2.md to measure specific planetary power and sub-lord dominance between the charts.
+- Use iva.md to weave the comparison into a cohesive, psychological narrative.
+</KNOWLEDGE_ROUTING>
+
 Rules:
 1. Rank ALL individuals per parameter, highest to lowest.
 2. Every rank requires specific chart evidence (planet, house, dignity, yoga, or KP verdict).
@@ -1272,6 +1291,12 @@ def build_prashna_prompt(question,dossier):
 PRASHNA (Horary) reading — cast for this exact moment, for this question ONLY.
 
 QUESTION: "{question}"
+
+<KNOWLEDGE_ROUTING>
+- Use kp6.md STRICTLY for the mathematical Yes/No decision and ruling planets.
+- Use bphs2.md ONLY for the narrative explanation of the houses involved.
+- WARNING: DO NOT mix Parashari Horary timing rules with KP Horary rules. KP math overrides all.
+</KNOWLEDGE_ROUTING>
 
 PRASHNA RULES:
 1. Lagna and its lord = the querent.
@@ -2416,6 +2441,8 @@ def show_consultation_room():
             5. FUTURE TRANSITS: You only have transit data for TODAY. For future predictions, strictly use their pre-computed 'VIMSHOTTARI DASHA' timeline. Explain it conversationally: "Looking at your planetary periods (Dashas)..."
             
             6. TAROT REDIRECT: If the user asks for a Tarot reading, adopt a cool, specialized persona: "My expertise lies in the stars, the planets, and astrological math—not the cards! For a mystic card reading, definitely check out the 'Mystic Tarot' tab in the menu."
+            
+            7. KNOWLEDGE ROUTING: If checking personality, use bphs1.md. If checking timing or Dashas, use bphs2.md. If checking KP Sub-Lords, use kp3.md. Synthesize everything using the modern tone of iva.md. Do not mix KP and Parashari timing rules.
             </CONSULTATION_GUARDRAILS>
             """
             base_prompt += guardrails
@@ -2426,8 +2453,8 @@ def show_consultation_room():
             
     # 3. Fire up the Universal Engine!
     if f"consult_prompt_{dp['name']}" in st.session_state:
-        # Stripped down to the 3 most essential books for maximum speed
-        consult_files = get_knowledge_files(["htrh1.md", "htrh2.md", "kp3.md"])
+        # Cleaned up stack using the new precision files
+        consult_files = get_knowledge_files(["bphs1.md", "bphs2.md", "kp3.md", "iva.md"])
         stream_ai_with_followup(st.session_state[f"consult_prompt_{dp['name']}"], memory_key, "Taking a seat at the table...", knowledge_files=consult_files)
 
 # ═══════════════════════════════════════════════════════════
@@ -2589,18 +2616,20 @@ def _run_oracle(mission):
         if mission=="Raw Data Only":
             render_post_generation(st.session_state[f"oracle_prompt_{mission}"])
         else:
-            # 🧠 DYNAMIC ROUTING: Choose the right books for the right mission
+            # 🧠 DYNAMIC ROUTING: Precision File Mapping
             if mission == "Prashna Kundli":
-                # Horary specific rules + House meanings
-                oracle_files = get_knowledge_files(["kp6.md", "htrh1.md", "htrh2.md"])
+                oracle_files = get_knowledge_files(["kp6.md", "kp2.md", "bphs2.md"])
             elif mission == "Gochara / Live Transit":
-                # Transit timing + House meanings
-                oracle_files = get_knowledge_files(["bphs2.md", "htrh1.md", "htrh2.md"])
+                oracle_files = get_knowledge_files(["bphs2.md", "iva.md"])
+            elif mission == "Matchmaking / Compatibility":
+                oracle_files = get_knowledge_files(["bphs1.md", "bphs2.md", "iva.md"])
+            elif mission == "Comparison (Multiple Profiles)":
+                oracle_files = get_knowledge_files(["bphs1.md", "kp2.md", "iva.md"])
             else:
-                # Deep Analysis, Matchmaking, and Comparison
-                oracle_files = get_knowledge_files(["bphs2.md", "kp2.md", "kp3.md", "htrh1.md", "htrh2.md"])
+                # Deep Analysis
+                oracle_files = get_knowledge_files(["bphs1.md", "bphs2.md", "kp3.md", "iva.md"])
 
-            stream_ai_with_followup(st.session_state[f"oracle_prompt_{mission}"], f"oracle_{mission}_history", "The Oracle is channeling the stars...", knowledge_files=oracle_files)
+                stream_ai_with_followup(st.session_state[f"oracle_prompt_{mission}"], f"oracle_{mission}_history", "The Oracle is channeling the stars...", knowledge_files=oracle_files)
 
 
 # ═══════════════════════════════════════════════════════════
