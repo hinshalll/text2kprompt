@@ -1,4 +1,5 @@
 import json, base64, secrets, textwrap, time as time_module
+import concurrent.futures # 🚀 Allows parallel AI agents
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import streamlit as st
@@ -14,7 +15,7 @@ from streamlit_local_storage import LocalStorage
 # ═══════════════════════════════════════════════════════════
 # APP CONFIG
 # ═══════════════════════════════════════════════════════════
-st.set_page_config(page_title="Kundli AI", page_icon="🪐", layout="wide",
+st.set_page_config(page_title="ASTRO SUITE beta", page_icon="🪐", layout="wide",
                    initial_sidebar_state="collapsed")
 try: swe.set_ephe_path("ephe")
 except: pass
@@ -282,7 +283,7 @@ def get_planet_lon_lat(jd,pid):
     f=swe.FLG_SWIEPH|swe.FLG_SIDEREAL|swe.FLG_SPEED; res,_=swe.calc_ut(jd,pid,f)
     return float(res[0])%360,float(res[1]),float(res[3])
 def get_rahu_longitude(jd):
-    res,_=swe.calc_ut(jd,swe.MEAN_NODE,swe.FLG_SWIEPH|swe.FLG_SIDEREAL); return float(res[0])%360
+    res,_=swe.calc_ut(jd,swe.TRUE_NODE,swe.FLG_SWIEPH|swe.FLG_SIDEREAL); return float(res[0])%360
 def get_placidus_cusps(jd,lat,lon):
     cusps,_=swe.houses_ex(jd,lat,lon,b"P",swe.FLG_SWIEPH|swe.FLG_SIDEREAL); return cusps
 
@@ -304,7 +305,7 @@ def get_live_cosmic_weather():
     all_pos={}
     for pname,pid in PLANETS.items():
         lon,_=get_planet_longitude_and_speed(jd,pid); all_pos[pname]=sign_name(sign_index_from_lon(lon))
-    r_lon,_=swe.calc_ut(jd,swe.MEAN_NODE,swe.FLG_SWIEPH|swe.FLG_SIDEREAL)
+    r_lon,_=swe.calc_ut(jd,swe.TRUE_NODE,swe.FLG_SWIEPH|swe.FLG_SIDEREAL)
     all_pos["Rahu"]=sign_name(sign_index_from_lon(float(r_lon[0])%360))
     all_pos["Ketu"]=sign_name(sign_index_from_lon((float(r_lon[0])+180)%360))
     return {"moon_sign":sign_name(moon_sidx),"sun_sign":sign_name(sun_sidx),"nakshatra":nak,
@@ -316,12 +317,12 @@ def get_live_cosmic_weather():
 # The AI Engine Helper Function & Auto-Switcher
 # ═══════════════════════════════════════════════════════════
 FREE_MODELS = [
-    "gemini-3-flash-preview",
-    "gemini-3.1-flash-lite-preview",
-    "gemini-2.5-flash"
+    "gemma-4-31b-it",                   # The Reader (Strict Rules)
+    "gemma-4-26b-a4b-it",                   # The Philosopher (Synthesis & UI)
+    "gemini-3.1-flash-lite-preview"  # The Speed Calculator (KP Math)
 ]
 
-@st.cache_resource(show_spinner="Awakening the Oracle's Knowledge Vault...", ttl=timedelta(hours=24))
+@st.cache_resource(show_spinner=False, ttl=timedelta(hours=24))
 def get_knowledge_files(file_names):
     """Fetches MD files from GitHub, uploads to Gemini, and caches them."""
     uploaded_files = []
@@ -352,11 +353,9 @@ def get_knowledge_files(file_names):
             
     return uploaded_files
 
-def get_ai_model(model_idx=0):
-    """Sets up the Gemini AI with strict XML Guardrails."""
-    current_model = FREE_MODELS[model_idx % len(FREE_MODELS)]
-    
-    system_rules = """
+def get_ai_model_by_name(model_name, custom_system_rules=None):
+    """Directly calls a specific model with dynamic system rules, preserving original guardrails."""
+    default_rules = """
     <ROLE>
     You are an elite, highly precise Vedic Astrologer, Numerologist, and Tarot Reader.
     </ROLE>
@@ -372,6 +371,8 @@ def get_ai_model(model_idx=0):
     You are strictly forbidden from altering, correcting, or inferring any numbers, degrees, planetary positions, or mathematical formulas. Treat all numbers in the text and user prompts as absolute, unchangeable facts.
     </STRICT_MATH_LOCK>
     """
+    
+    system_rules = custom_system_rules or default_rules
     safe_config = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -379,37 +380,42 @@ def get_ai_model(model_idx=0):
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
     ]
     
+    # Check if the rules mention "warm" or "conversational" to dynamically adjust creativity
+    is_chat = custom_system_rules and "conversational" in custom_system_rules.lower()
+    gen_config = {"temperature": 0.5 if is_chat else 0.1} 
+    
     return genai.GenerativeModel(
-        model_name=current_model, 
-        system_instruction=system_rules,
-        safety_settings=safe_config
+        model_name=model_name, 
+        system_instruction=system_rules, 
+        safety_settings=safe_config,
+        generation_config=gen_config
     )
 
-def generate_content_with_fallback(prompt, knowledge_files=None, generation_config=None):
-    """Silently loops through free models if a 429 Quota error occurs."""
-    if "model_idx" not in st.session_state:
-        st.session_state.model_idx = 0
-        
-    content_to_send = knowledge_files + [prompt] if knowledge_files else [prompt]
-        
-    attempts = 0
-    while attempts < len(FREE_MODELS):
+def agent_worker(prompt, file_objs, model_id, retries=2):
+    if not isinstance(file_objs, list): file_objs = [file_objs]
+    for attempt in range(retries):
         try:
-            model = get_ai_model(model_idx=st.session_state.model_idx)
-            if generation_config:
-                return model.generate_content(content_to_send, generation_config=generation_config).text
-            return model.generate_content(content_to_send).text
+            model = get_ai_model_by_name(model_id)
+            return model.generate_content(file_objs + [prompt]).text
         except Exception as e:
-            err_str = str(e).lower()
-            if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
-                attempts += 1
-                st.session_state.model_idx = (st.session_state.model_idx + 1) % len(FREE_MODELS)
-            else:
-                raise e 
+            if attempt == retries - 1:
+                return f"Agent Note: Data extraction failed ({str(e)}). Please infer from raw dossier."
+            time_module.sleep(2) # Wait 2 seconds and try again
+
+def generate_content_with_fallback(prompt, knowledge_files=None, preferred_model="gemini-3.1-flash-lite-preview"):
+    """Global fallback wrapper that prioritizes the MoE model for UI speed."""
+    content_to_send = knowledge_files + [prompt] if knowledge_files else [prompt]
+    models_to_try = [preferred_model] + [m for m in FREE_MODELS if m != preferred_model]
+    for m_name in models_to_try:
+        try:
+            return get_ai_model_by_name(m_name).generate_content(content_to_send).text
+        except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower(): continue
+            raise e 
     raise Exception("All free models limits reached.")
 
 @st.cache_data(ttl=timedelta(hours=24), show_spinner=False)
-def generate_western_forecast(sun_sign, today_str):
+def generate_western_forecast(sun_sign, today_str, user_tz):
     # Strictly Daily - no timeframe argument needed
     transits = get_western_transits_today()
     
@@ -538,7 +544,8 @@ RESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN:
         "MANTRA": "A short, powerful affirmation."
     }"""
     dash_tarot_file = get_knowledge_files(["tguide.md"])
-    res = generate_content_with_fallback(json_prompt, knowledge_files=dash_tarot_file)
+    # SPEED OPTIMIZATION: Instant Tarot reveals
+    res = generate_content_with_fallback(json_prompt, knowledge_files=dash_tarot_file, preferred_model="gemini-3.1-flash-lite-preview")
     return safe_json(res, {
         "MEANING": "Trust the process unfolding today.",
         "ACTION": "Observe before making any sudden moves.",
@@ -548,27 +555,24 @@ RESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN:
 # ═══════════════════════════════════════════════════════════
 # THE UNIVERSAL AI CHAT ENGINE
 # ═══════════════════════════════════════════════════════════
-def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting...", knowledge_files=None):
+def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting...", knowledge_files=None, preferred_model="gemini-3.1-flash-lite-preview"):
     """A universal component that streams AI text and handles follow-up chats."""
     st.markdown("---")
     st.markdown("### ✨ AI Reading")
     
-    if "model_idx" not in st.session_state:
-        st.session_state.model_idx = 0
-    
     content_to_send = knowledge_files + [prompt] if knowledge_files else [prompt]
+    newly_generated = False # 🛠️ Track if we just made a new reading
     
     # 1. First run: Generate the main reading
     if memory_key not in st.session_state or len(st.session_state[memory_key]) == 0:
         st.session_state[memory_key] = []
-        success = False
-        attempts = 0
-        res_ph = st.empty()
+        newly_generated = True # 🛠️ Flag that we are generating right now
         
-        with st.spinner(spinner_text):
-            while not success and attempts < len(FREE_MODELS):
+        with st.chat_message("assistant"): # 🛠️ Output directly into a chat bubble
+            res_ph = st.empty()
+            with st.spinner(spinner_text):
                 try:
-                    model = get_ai_model(model_idx=st.session_state.model_idx)
+                    model = get_ai_model_by_name(preferred_model)
                     chat = model.start_chat(history=[])
                     response = chat.send_message(content_to_send, stream=True)
                     f_res = ""
@@ -577,25 +581,16 @@ def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting...", 
                         res_ph.markdown(f_res + "▌")
                     res_ph.markdown(f_res)
                     
-                    # Save the FULL content (Files + Prompt) to history so follow-ups never forget the MD files
-                    st.session_state[memory_key].append({"role": "user", "parts": content_to_send})
+                    # 🛠️ HISTORY BLOAT FIX: Save ONLY the text prompt to memory, NOT the heavy files!
+                    st.session_state[memory_key].append({"role": "user", "parts": [prompt]})
                     st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
-                    success = True
                 except Exception as e:
-                    err_str = str(e).lower()
-                    if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
-                        attempts += 1
-                        st.session_state.model_idx = (st.session_state.model_idx + 1) % len(FREE_MODELS)
-                    else:
-                        st.error(f"API Error: {e}")
-                        return
-                        
-            if not success:
-                st.warning("⏳ The Astrologer is taking a breather. Please wait a while!")
-                return
+                    st.error(f"API Error: {e}")
+                    return
 
     # 2. Render existing chat history
-    if len(st.session_state[memory_key]) > 0:
+    # 🛠️ CRITICAL FIX: Only render history if we didn't JUST generate the first message!
+    if len(st.session_state[memory_key]) > 0 and not newly_generated:
         for i, msg in enumerate(st.session_state[memory_key]):
             if i == 0: continue 
             role = "assistant" if msg["role"] == "model" else "user"
@@ -603,42 +598,29 @@ def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting...", 
                 display_text = msg["parts"][-1]
                 st.markdown(display_text)
 
-        # 3. Follow-up Chat Box
-        if follow_up := st.chat_input("Ask a follow-up question...", key=f"chatin_{memory_key}"):
-            with st.chat_message("user"):
-                st.markdown(follow_up)
-                
-            with st.chat_message("assistant"):
-                res_ph = st.empty()
-                success = False
-                attempts = 0
-                
-                with st.spinner("Thinking..."):
-                    while not success and attempts < len(FREE_MODELS):
-                        try:
-                            model = get_ai_model(model_idx=st.session_state.model_idx)
-                            chat = model.start_chat(history=st.session_state[memory_key])
-                            res = chat.send_message(follow_up, stream=True)
-                            f_res = ""
-                            for chunk in res:
-                                f_res += chunk.text
-                                res_ph.markdown(f_res + "▌")
-                            res_ph.markdown(f_res)
-                            
-                            st.session_state[memory_key].append({"role": "user", "parts": [follow_up]})
-                            st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
-                            st.rerun()
-                            success = True
-                        except Exception as e:
-                            err_str = str(e).lower()
-                            if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
-                                attempts += 1
-                                st.session_state.model_idx = (st.session_state.model_idx + 1) % len(FREE_MODELS)
-                            else:
-                                res_ph.error(f"API Error: {e}")
-                                break
-                    if not success:
-                        res_ph.error("⏳ The cosmic connection was interrupted.")
+    # 3. Follow-up Chat Box
+    if follow_up := st.chat_input("Ask a follow-up question...", key=f"chatin_{memory_key}"):
+        with st.chat_message("user"):
+            st.markdown(follow_up)
+            
+        with st.chat_message("assistant"):
+            res_ph = st.empty()
+            with st.spinner("Thinking..."):
+                try:
+                    model = get_ai_model_by_name(preferred_model)
+                    chat = model.start_chat(history=st.session_state[memory_key])
+                    res = chat.send_message(follow_up, stream=True)
+                    f_res = ""
+                    for chunk in res:
+                        f_res += chunk.text
+                        res_ph.markdown(f_res + "▌")
+                    res_ph.markdown(f_res)
+                    
+                    st.session_state[memory_key].append({"role": "user", "parts": [follow_up]})
+                    st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
+                    st.rerun()
+                except Exception as e:
+                    res_ph.error(f"API Error: {e}")
 
 # ═══════════════════════════════════════════════════════════
 # ADVANCED ASTRO ENGINES
@@ -695,7 +677,7 @@ def detect_graha_yuddha(jd_ut, planet_data):
         for p2 in plist[i+1:]:
             l1=planet_data[p1][0]; l2=planet_data[p2][0]
             diff=abs(l1-l2); diff=min(diff,360-diff)
-            if diff<=1.0:
+            if diff<=0.5:
                 try:
                     res1,_=swe.calc_ut(jd_ut,PLANETS[p1],swe.FLG_SWIEPH|swe.FLG_SIDEREAL); lat1=float(res1[1])
                     res2,_=swe.calc_ut(jd_ut,PLANETS[p2],swe.FLG_SWIEPH|swe.FLG_SIDEREAL); lat2=float(res2[1])
@@ -1160,11 +1142,31 @@ def get_gochara_overlay(profile):
 # ═══════════════════════════════════════════════════════════
 # GUARDRAILS (Now handled dynamically by the System AI Model)
 # ═══════════════════════════════════════════════════════════
-GUARDRAILS = ""
+GUARDRAILS = """
+<OUT_OF_BOUNDS_PROTOCOL>
+If the user asks a follow-up question about a topic, planet, or timing event that is NOT explicitly covered in the data provided in this prompt, DO NOT guess or hallucinate. 
+Instead, reply warmly: "I don't have that specific data loaded in this static report. To dive into new chart research, please head over to the **Consultation Room** where I can open the heavy books and calculate that for you!"
+</OUT_OF_BOUNDS_PROTOCOL>
+"""
 
 # ═══════════════════════════════════════════════════════════
 # PROMPT BUILDERS (XML tagged)
 # ═══════════════════════════════════════════════════════════
+
+def build_agent_parashari_prompt(dossier):
+    return f"""{GUARDRAILS}\n<mission>Using ONLY bphs1.md, extract factual bullet points for: Core Identity (Lagna Lord), Mental World (Moon Avastha), and Health (H6/H8).</mission>\n<user_chart_data>{dossier}</user_chart_data>"""
+
+def build_agent_timing_prompt(dossier):
+    return f"""{GUARDRAILS}\n<mission>Using ONLY bphs2.md, analyze the VIMSHOTTARI DASHA table and SADE SATI. Identify exactly which phase they are in and what the next 2 sub-periods bring.</mission>\n<user_chart_data>{dossier}</user_chart_data>"""
+
+def build_agent_kp_prompt(dossier):
+    return f"""{GUARDRAILS}\n<mission>Using ONLY kp3.md, read the HOUSE STRENGTH SUMMARY. Explain why Career (H10) and Wealth (H2) are 'promised' or 'not promised'.</mission>\n<user_chart_data>{dossier}</user_chart_data>"""
+
+def build_master_synthesizer_prompt(dossier, p_notes, t_notes, k_notes):
+    return f"""{GUARDRAILS}\n<mission>You are the Master Astrologer. Synthesize these specialist notes into a final, flowing, human reading using iva.md.
+    <notes_p>{p_notes}</notes_p> <notes_t>{t_notes}</notes_t> <notes_k>{k_notes}</notes_k>
+    Structure: 1. Identity. 2. Mind. 3. Career. 4. Wealth. 5. Relationships. 6. Timing. 7. Remedies.</mission>\n<user_chart_data>{dossier}</user_chart_data>"""
+
 def build_deep_analysis_prompt(dossier):
     return f"""{GUARDRAILS}
 
@@ -1964,7 +1966,7 @@ def resolve_profile(item):
 # ═══════════════════════════════════════════════════════════
 def render_sidebar():
     with st.sidebar:
-        st.markdown("<h2 style='text-align:center;margin-bottom:1.5rem;font-size:1.3rem;'>🪐 Kundli AI</h2>",unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align:center;margin-bottom:1.5rem;font-size:1.3rem;'>🪐 ASTRO SUITE beta</h2>",unsafe_allow_html=True)
         pages=[("🌌 Dashboard","Dashboard"),
                ("💬 Consult Room","Consultation Room"),  # <-- ADDED THIS
                ("🔮 The Oracle","The Oracle"),
@@ -2402,60 +2404,73 @@ def show_consultation_room():
 
     st.success(f"The Astrologer is currently looking at the chart for: **{dp['name']}**")
     
-    memory_key = f"consult_chat_{dp['name']}"
+    memory_key = f"v2_chat_{dp['name']}"
+    if memory_key not in st.session_state: st.session_state[memory_key] = []
     
-    # 2. If the chat is empty, silently build the chart dossier AND today's transits
-    if memory_key not in st.session_state or len(st.session_state[memory_key]) == 0:
-        with st.spinner("Astrologer is studying the chart..."):
-            dossier = generate_astrology_dossier(dp)
-            
-            # Grab today's transits so the AI knows the daily weather
-            transits = get_gochara_overlay(dp)
-            
-            prof_date = date.fromisoformat(dp['date'])
-            prof_time = datetime.strptime(dp['time'], '%H:%M').time()
-            jd_ut, _, _ = local_to_julian_day(prof_date, prof_time, dp['tz'])
-            lagna_deg, _ = get_lagna_and_cusps(jd_ut, dp['lat'], dp['lon'])
-            ascendant_sign = sign_name(sign_index_from_lon(lagna_deg))
-            
-            # Inject the transits into the system prompt
-            base_prompt = build_raw_prompt(dossier)
-            base_prompt += f"\n\n<live_transits_today>\n{transits}\n</live_transits_today>"
-            
-            # 🛡️ THE HUMAN-CENTERED GUARDRAILS (WATERFALL & REDIRECTS)
-            guardrails = """
-            <CONSULTATION_GUARDRAILS>
-            You are a warm, highly empathetic, and professional Vedic Astrologer. Speak conversationally, directly to the user, and avoid sounding like a robot. 
-            
-            1. MISSING USER CONTEXT: If you need to know the user's current life situation (e.g., "Are you currently employed?", "Are you married?") to make a personalized prediction, ASK THEM conversationally. Do not assume their situation.
-            
-            2. INQUIRIES ABOUT OTHERS (DATA GATHERING): If the user asks about another person but provides ZERO data, do not guess. Reply warmly: "I'd love to look into this for you! To get the best insights, could you share whatever details you have for them? A full birth date, time, and place is perfect, but even just their full name or first name gives me something to work with!"
-            
-            3. INQUIRIES ABOUT OTHERS (THE WATERFALL): Whenever you have data about another person (either provided upfront or after you asked), apply this logic automatically:
-               - FIRST NAME ONLY: Use Vedic Name Astrology (Swara Shastra / Nama Nakshatra based on the first phonetic sound). Include a warm disclaimer: "Since I only have a first name, I'm using Vedic Name Astrology to sense their energy. Take this with a pinch of salt, as true precision requires a full birth chart!"
-               - FULL NAME ONLY: Use Chaldean/Pythagorean Numerology AND Vedic Name Astrology. Include a warm disclaimer: "Based on their full name, I'm tapping into Numerology to see their vibe. Keep in mind, true astrological accuracy requires a birth chart, so take this as a guiding light!"
-               - FULL BIRTH DETAILS: Give a general astrological reading based on their placements. Add: "Since I can't run complex dual-chart math inside this chat window, here is a general reading based on their core placements!"
-            
-            4. MATCHMAKING / RISHTAS (STRICT INTENT): DO NOT assume a user wants matchmaking just because they mention another person. ONLY if the user explicitly asks for romantic compatibility, a 'rishta' check, or marriage matchmaking, reply warmly: "For a deep, mathematically precise compatibility check between your charts, please visit the 'Matchmaking / Compatibility' tab in the menu! I can give you a few quick thoughts here, but that tool is built exactly for this."
-            
-            5. FUTURE TRANSITS: You only have transit data for TODAY. For future predictions, strictly use their pre-computed 'VIMSHOTTARI DASHA' timeline. Explain it conversationally: "Looking at your planetary periods (Dashas)..."
-            
-            6. TAROT REDIRECT: If the user asks for a Tarot reading, adopt a cool, specialized persona: "My expertise lies in the stars, the planets, and astrological math—not the cards! For a mystic card reading, definitely check out the 'Mystic Tarot' tab in the menu."
-            
-            7. KNOWLEDGE ROUTING: If checking personality, use bphs1.md. If checking timing or Dashas, use bphs2.md. If checking KP Sub-Lords, use kp3.md. Synthesize everything using the modern tone of iva.md. Do not mix KP and Parashari timing rules.
-            </CONSULTATION_GUARDRAILS>
-            """
-            base_prompt += guardrails
-            
-            welcome_command = f"\n\n<mission>Acknowledge me by my name ({dp['name']}). Tell me you are looking at my chart and see my Ascendant is {ascendant_sign}. Keep it to 2 brief sentences. Then ask what I would like to know.</mission>"
-            
-            st.session_state[f"consult_prompt_{dp['name']}"] = base_prompt + welcome_command
-            
-    # 3. Fire up the Universal Engine!
-    if f"consult_prompt_{dp['name']}" in st.session_state:
-        # Cleaned up stack using the new precision files
-        consult_files = get_knowledge_files(["bphs1.md", "bphs2.md", "kp3.md", "iva.md"])
-        stream_ai_with_followup(st.session_state[f"consult_prompt_{dp['name']}"], memory_key, "Taking a seat at the table...", knowledge_files=consult_files)
+    # UI History
+    for msg in st.session_state[memory_key]:
+        with st.chat_message("assistant" if msg["role"] == "model" else "user"):
+            st.markdown(msg["display"])
+
+    if q := st.chat_input("Ask anything..."):
+        st.chat_message("user").markdown(q)
+        with st.chat_message("assistant"):
+            res_ph = st.empty()
+            with st.spinner("Consulting books..."):
+                dos = generate_astrology_dossier(dp)
+                transits = get_gochara_overlay(dp)
+                books = get_knowledge_files(["bphs1.md", "bphs2.md", "kp3.md"])
+                
+                # 🛡️ RESTORED: THE HUMAN-CENTERED GUARDRAILS (WATERFALL & REDIRECTS)
+                guardrails = """
+                <CONSULTATION_GUARDRAILS>
+                You are a warm, highly empathetic, and professional Vedic Astrologer. Speak conversationally, directly to the user, and avoid sounding like a robot. 
+                
+                1. MISSING USER CONTEXT: If you need to know the user's current life situation (e.g., "Are you currently employed?", "Are you married?") to make a personalized prediction, ASK THEM conversationally. Do not assume their situation.
+                
+                2. INQUIRIES ABOUT OTHERS (DATA GATHERING): If the user asks about another person but provides ZERO data, do not guess. Reply warmly: "I'd love to look into this for you! To get the best insights, could you share whatever details you have for them? A full birth date, time, and place is perfect, but even just their full name or first name gives me something to work with!"
+                
+                3. INQUIRIES ABOUT OTHERS (THE WATERFALL): Whenever you have data about another person (either provided upfront or after you asked), apply this logic automatically:
+                   - FIRST NAME ONLY: Use Vedic Name Astrology (Swara Shastra / Nama Nakshatra based on the first phonetic sound). Include a warm disclaimer: "Since I only have a first name, I'm using Vedic Name Astrology to sense their energy. Take this with a pinch of salt, as true precision requires a full birth chart!"
+                   - FULL NAME ONLY: Use Chaldean/Pythagorean Numerology AND Vedic Name Astrology. Include a warm disclaimer: "Based on their full name, I'm tapping into Numerology to see their vibe. Keep in mind, true astrological accuracy requires a birth chart, so take this as a guiding light!"
+                   - FULL BIRTH DETAILS: Give a general astrological reading based on their placements. Add: "Since I can't run complex dual-chart math inside this chat window, here is a general reading based on their core placements!"
+                
+                4. MATCHMAKING / RISHTAS (STRICT INTENT): DO NOT assume a user wants matchmaking just because they mention another person. ONLY if the user explicitly asks for romantic compatibility, a 'rishta' check, or marriage matchmaking, reply warmly: "For a deep, mathematically precise compatibility check between your charts, please visit the 'Matchmaking / Compatibility' tab in the menu! I can give you a few quick thoughts here, but that tool is built exactly for this."
+                
+                5. FUTURE TRANSITS: You only have transit data for TODAY. For future predictions, strictly use their pre-computed 'VIMSHOTTARI DASHA' timeline. Explain it conversationally: "Looking at your planetary periods (Dashas)..."
+                
+                6. TAROT REDIRECT: If the user asks for a Tarot reading, adopt a cool, specialized persona: "My expertise lies in the stars, the planets, and astrological math—not the cards! For a mystic card reading, definitely check out the 'Mystic Tarot' tab in the menu."
+                
+                7. KNOWLEDGE ROUTING: If checking personality, use bphs1.md. If checking timing or Dashas, use bphs2.md. If checking KP Sub-Lords, use kp3.md. Synthesize everything using the modern tone of iva.md. Do not mix KP and Parashari timing rules.
+                </CONSULTATION_GUARDRAILS>
+                """
+                
+                # PARALLEL FETCHING OF FACTS PER MESSAGE
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    f_p = executor.submit(agent_worker, f"Extract identity facts for: {q}", books[0], "gemma-4-31b-it")
+                    f_t = executor.submit(agent_worker, f"Extract timing facts for: {q}", books[1], "gemma-4-31b-it")
+                    # SHIFTED TO GEMMA: Protects Gemini's 250k TPM limit by letting Gemma read the heavy kp3.md book
+                    f_k = executor.submit(agent_worker, f"Extract math facts for: {q}", books[2], "gemma-4-26b-a4b-it")
+                    notes = f"PARASHARI: {f_p.result()}\nTIMING: {f_t.result()}\nKP: {f_k.result()}\nLIVE TRANSITS TODAY: {transits}"
+
+                # SYNTHESIS (History is kept slim, but your rules are enforced)
+                hist = [{"role": m["role"], "parts": [m["internal"]]} for m in st.session_state[memory_key]]
+                
+                # CRITICAL FIX: Explicitly command the AI NOT to dump raw notes!
+                combined_rules = guardrails + f"\n\nCRITICAL INSTRUCTION: Read the Agent Notes below to inform your accuracy, but DO NOT output them as raw lists, bullet points, or code blocks. Weave the information into a natural, warm, conversational response to the user.\n\nAGENT NOTES:\n{notes}"
+                
+                model = get_ai_model_by_name("gemini-3.1-flash-lite-preview", custom_system_rules=combined_rules)
+                chat = model.start_chat(history=hist)
+                response = chat.send_message(q, stream=True)
+                
+                full_txt = ""
+                for chunk in response: 
+                    full_txt += chunk.text
+                    res_ph.markdown(full_txt + "▌")
+                res_ph.markdown(full_txt)
+                
+                st.session_state[memory_key].append({"role": "user", "display": q, "internal": q})
+                st.session_state[memory_key].append({"role": "model", "display": full_txt, "internal": full_txt})
 
 # ═══════════════════════════════════════════════════════════
 # ORACLE
@@ -2466,13 +2481,12 @@ def show_oracle():
     st.markdown("<p style='color:rgba(255,255,255,.6)'>Mathematically locked AI prompts from Swiss Ephemeris precision.</p>",unsafe_allow_html=True)
     missions={"Deep Personal Analysis":"🔮 Full Life Reading","Matchmaking / Compatibility":"✦ Compatibility Match",
               "Gochara / Live Transit":"🌍 Live Transit Analysis","Comparison (Multiple Profiles)":"⚖ Compare Profiles",
-              "Prashna Kundli":"🎯 Ask a Question","Raw Data Only":"📋 Raw Chart Data"}
+              "Prashna Kundli":"🎯 Ask a Question"}
     descs={"Deep Personal Analysis":"Complete reading — personality, career, wealth, marriage, timing.",
            "Matchmaking / Compatibility":"Ashta Koota + Manglik + KP marriage promise.",
            "Gochara / Live Transit":"How today's planets activate your natal chart right now.",
            "Comparison (Multiple Profiles)":"Rank multiple people with planetary evidence.",
-           "Prashna Kundli":"Ask a specific question. Get Yes/No/Delayed.",
-           "Raw Data Only":"Full chart data. Paste into any AI and ask anything."}
+           "Prashna Kundli":"Ask a specific question. Get Yes/No/Delayed."}
     cur=st.session_state.active_mission if st.session_state.active_mission in missions else "Deep Personal Analysis"
     cur_label=missions.get(cur,"🔮 Full Life Reading")
     sel_label=st.selectbox("Select Tool",list(missions.values()),index=list(missions.values()).index(cur_label),label_visibility="collapsed")
@@ -2536,7 +2550,7 @@ def _run_oracle(mission):
         return
 
     # ── MAIN ORACLE MODES ──
-    req=1 if mission in ["Raw Data Only","Deep Personal Analysis"] else 2
+    req=1 if mission in ["Deep Personal Analysis"] else 2
     num_slots=st.session_state.comp_slots if mission=="Comparison (Multiple Profiles)" else req
     st.markdown("#### Profile Selection")
     active=[]
@@ -2585,10 +2599,19 @@ def _run_oracle(mission):
         compact=mission=="Comparison (Multiple Profiles)" and len(profiles)>3
         
         with st.spinner("Consulting the ephemeris..."):
-            if mission=="Raw Data Only":
-                final=build_raw_prompt(generate_astrology_dossier(profiles[0],d60s[0]))
-            elif mission=="Deep Personal Analysis":
-                final=build_deep_analysis_prompt(generate_astrology_dossier(profiles[0],d60s[0]))
+            if mission=="Deep Personal Analysis":
+                dossier = generate_astrology_dossier(profiles[0], d60s[0])
+                st.info("🧠 Firing Parallel AI Agents (Takes ~20s)...")
+                agent_files = get_knowledge_files(["bphs1.md", "bphs2.md", "kp3.md"])
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    f_p = executor.submit(agent_worker, build_agent_parashari_prompt(dossier), agent_files[0], "gemma-4-31b-it")
+                    f_t = executor.submit(agent_worker, build_agent_timing_prompt(dossier), agent_files[1], "gemma-4-31b-it")
+                    # SHIFTED TO GEMMA: Protects Gemini's 250k TPM limit
+                    f_k = executor.submit(agent_worker, build_agent_kp_prompt(dossier), agent_files[2], "gemma-4-26b-a4b-it")
+                    p_notes, t_notes, k_notes = f_p.result(), f_t.result(), f_k.result()
+                    
+                final = build_master_synthesizer_prompt(dossier, p_notes, t_notes, k_notes)
             elif mission=="Matchmaking / Compatibility":
                 ma=get_moon_lon_from_profile(profiles[0]); mb=get_moon_lon_from_profile(profiles[1])
                 koota=calculate_ashta_koota(ma,mb)
@@ -2613,10 +2636,7 @@ def _run_oracle(mission):
 
     # If the prompt is saved in the state, fire up the AI!
     if f"oracle_prompt_{mission}" in st.session_state:
-        if mission=="Raw Data Only":
-            render_post_generation(st.session_state[f"oracle_prompt_{mission}"])
-        else:
-            # 🧠 DYNAMIC ROUTING: Precision File Mapping
+        # 🧠 DYNAMIC ROUTING: Precision File Mapping
             if mission == "Prashna Kundli":
                 oracle_files = get_knowledge_files(["kp6.md", "kp2.md", "bphs2.md"])
             elif mission == "Gochara / Live Transit":
@@ -2626,10 +2646,11 @@ def _run_oracle(mission):
             elif mission == "Comparison (Multiple Profiles)":
                 oracle_files = get_knowledge_files(["bphs1.md", "kp2.md", "iva.md"])
             else:
-                # Deep Analysis
-                oracle_files = get_knowledge_files(["bphs1.md", "bphs2.md", "kp3.md", "iva.md"])
+                # Deep Analysis: The heavy books were already read by the parallel agents.
+                # The Synthesizer only needs the 'iva.md' tone guide to write the final text.
+                oracle_files = get_knowledge_files(["iva.md"])
 
-                stream_ai_with_followup(st.session_state[f"oracle_prompt_{mission}"], f"oracle_{mission}_history", "The Oracle is channeling the stars...", knowledge_files=oracle_files)
+                stream_ai_with_followup(st.session_state[f"oracle_prompt_{mission}"], f"oracle_{mission}_history", "The Master Astrologer is writing...", knowledge_files=oracle_files, preferred_model="gemini-3.1-flash-lite-preview")
 
 
 # ═══════════════════════════════════════════════════════════
