@@ -12,6 +12,7 @@ import json
 import cv2
 import mediapipe as mp
 import numpy as np
+import imageio.v3 as iio
 import PIL.Image
 from PIL import ImageEnhance, ImageOps
 import swisseph as swe
@@ -3006,51 +3007,60 @@ def extract_knowledge_snippet(json_path, search_terms):
         return "\n".join(snippets)
     return "No classical texts found for these specific symbols."
     
-    # --- MODULE A: The Sharpness Filter (OpenCV) ---
+    # --- MODULE A: The Sharpness Filter (No OpenCV) ---
 @st.cache_data(show_spinner=False)
 def extract_sharpest_frame(video_bytes):
     """
-    Reads a video buffer, calculates the Laplacian variance (sharpness), 
-    and returns the single sharpest frame as a PIL Image.
+    Reads a video buffer, calculates a simple Laplacian-variance style sharpness
+    score, and returns the sharpest frame as a PIL Image.
     """
     temp_video_path = "temp_palm_video.mp4"
     with open(temp_video_path, "wb") as f:
         f.write(video_bytes)
 
-    cap = cv2.VideoCapture(temp_video_path)
     best_frame = None
-    max_sharpness = 0.0
-    frame_count = 0
+    max_sharpness = -1.0
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        # Process every 5th frame to keep it lightning fast
-        if frame_count % 5 == 0:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
-            
+    def laplacian_variance(gray: np.ndarray) -> float:
+        gray = gray.astype(np.float32)
+        p = np.pad(gray, 1, mode="edge")
+        lap = (
+            -4 * p[1:-1, 1:-1]
+            + p[:-2, 1:-1]
+            + p[2:, 1:-1]
+            + p[1:-1, :-2]
+            + p[1:-1, 2:]
+        )
+        return float(lap.var())
+
+    try:
+        for idx, frame in enumerate(iio.imiter(temp_video_path)):
+            if idx % 5 != 0:
+                continue
+
+            frame = np.asarray(frame)
+
+            if frame.ndim == 2:
+                rgb = np.stack([frame] * 3, axis=-1)
+                gray = frame
+            else:
+                rgb = frame[..., :3]
+                gray = (0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2])
+
+            sharpness = laplacian_variance(gray)
             if sharpness > max_sharpness:
                 max_sharpness = sharpness
-                best_frame = frame.copy()
-        
-        frame_count += 1
+                best_frame = PIL.Image.fromarray(rgb.astype(np.uint8))
 
-    cap.release()
-    if os.path.exists(temp_video_path):
-        os.remove(temp_video_path)
+    finally:
+        if os.path.exists(temp_video_path):
+            os.remove(temp_video_path)
 
     if best_frame is not None:
-        best_frame_rgb = cv2.cvtColor(best_frame, cv2.COLOR_BGR2RGB)
-        pil_img = PIL.Image.fromarray(best_frame_rgb)
-        
-        # Drop brightness by 15% and boost contrast by 50% to make lines POP
-        pil_img = ImageEnhance.Brightness(pil_img).enhance(0.85)
-        pil_img = ImageEnhance.Contrast(pil_img).enhance(1.5)
-        
-        return pil_img
+        best_frame = ImageEnhance.Brightness(best_frame).enhance(0.85)
+        best_frame = ImageEnhance.Contrast(best_frame).enhance(1.5)
+        return best_frame
+
     return None
 
 # --- MODULE B & C: 3D Topography (Modern MediaPipe Tasks API) ---
