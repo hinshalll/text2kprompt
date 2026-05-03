@@ -4,8 +4,8 @@ pyswisseph
 geopy
 timezonefinder
 streamlit-local-storage
-opencv-python-headless==4.9.0.80
-mediapipe==0.10.11
+opencv-python-headless
+mediapipe
 numpy
 Pillow
 requests
