@@ -4,7 +4,8 @@ pyswisseph
 geopy
 timezonefinder
 streamlit-local-storage
-opencv-python-headless
+imageio
+imageio-ffmpeg
 mediapipe
 numpy
 Pillow
