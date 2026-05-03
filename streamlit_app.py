@@ -3053,34 +3053,53 @@ def extract_sharpest_frame(video_bytes):
         return pil_img
     return None
 
-# --- MODULE B & C: 3D Topography (MediaPipe) ---
+# --- MODULE B & C: 3D Topography (Modern MediaPipe Tasks API) ---
 def analyze_hand_geometry(pil_image):
     """
-    Uses MediaPipe to extract 3D depth (Z-axis), check Mount elevations,
-    and generate Sector Cropping boxes for the Vision AI.
+    Uses modern MediaPipe Tasks API to extract 3D depth (Z-axis), 
+    check Mount elevations, and generate Sector Cropping boxes.
     """
-    from mediapipe.python.solutions import hands as mp_hands
-    hands = mp_hands.Hands(static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5)
-    
-    image_np = np.array(pil_image)
-    results = hands.process(image_np)
-    
+    # 1. Auto-download the Google AI hand tracking model if missing
+    task_path = "hand_landmarker.task"
+    if not os.path.exists(task_path):
+        url = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+        with open(task_path, 'wb') as f:
+            f.write(requests.get(url).content)
+
+    # 2. Configure the new Vision AI
+    BaseOptions = mp.tasks.BaseOptions
+    HandLandmarker = mp.tasks.vision.HandLandmarker
+    HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
+    VisionRunningMode = mp.tasks.vision.RunningMode
+
+    options = HandLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=task_path),
+        running_mode=VisionRunningMode.IMAGE,
+        num_hands=1)
+
     geometry_data = {
         "hand_type": "Unknown",
         "mount_elevations": {},
         "crop_sectors": {}
     }
     
-    if not results.multi_hand_landmarks:
+    # 3. Process the image
+    image_np = np.array(pil_image)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_np)
+    
+    with HandLandmarker.create_from_options(options) as landmarker:
+        results = landmarker.detect(mp_image)
+        
+    if not results.hand_landmarks:
         return geometry_data
         
-    landmarks = results.multi_hand_landmarks[0].landmark
+    landmarks = results.hand_landmarks[0]
     h, w, _ = image_np.shape
 
-    # 1. Calculate Hand Proportions (Chirognomy)
-    wrist = landmarks[mp_hands.HandLandmark.WRIST]
-    middle_base = landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
-    middle_tip = landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+    # 4. Calculate Hand Proportions (Indices: 0=Wrist, 9=Middle Base, 12=Middle Tip)
+    wrist = landmarks[0]
+    middle_base = landmarks[9]
+    middle_tip = landmarks[12]
     
     palm_length = np.sqrt((middle_base.x - wrist.x)**2 + (middle_base.y - wrist.y)**2)
     finger_length = np.sqrt((middle_tip.x - middle_base.x)**2 + (middle_tip.y - middle_base.y)**2)
@@ -3090,26 +3109,24 @@ def analyze_hand_geometry(pil_image):
     else:
          geometry_data["hand_type"] = "Fire/Earth (Pitta/Kapha dominant)"
 
-    # 2. Z-Axis Topography (Checking Mount Elevations)
-    # The lower the Z value, the closer the mount is to the camera (elevated)
-    center_z = landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_MCP].z 
-    jupiter_z = landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP].z
-    venus_z = landmarks[mp_hands.HandLandmark.THUMB_CMC].z
+    # 5. Z-Axis Topography (Indices: 1=Venus/Thumb Base, 5=Jupiter/Index Base, 9=Center)
+    center_z = landmarks[9].z 
+    jupiter_z = landmarks[5].z
+    venus_z = landmarks[1].z
     
     if jupiter_z < center_z - 0.02:
         geometry_data["mount_elevations"]["Mount of Jupiter"] = "Elevated"
     if venus_z < center_z - 0.02:
          geometry_data["mount_elevations"]["Mount of Venus"] = "Elevated"
 
-    # 3. Sector Cropping Bounding Boxes (For high-accuracy Vision scanning)
+    # 6. Sector Cropping Bounding Boxes
     geometry_data["crop_sectors"]["Jupiter_Mount"] = (
-        int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP].x * w) - 100,
-        int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP].y * h) - 50,
-        int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP].x * w) + 100,
-        int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP].y * h) + 150
+        int(landmarks[5].x * w) - 100,
+        int(landmarks[5].y * h) - 50,
+        int(landmarks[5].x * w) + 100,
+        int(landmarks[5].y * h) + 150
     )
     
-    hands.close()
     return geometry_data
     
     # --- MODULE D: The Vision Scanner (Gemini Flash) ---
