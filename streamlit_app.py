@@ -128,7 +128,7 @@ CELTIC_CROSS_POSITIONS = [
     "10. The Outcome — Most likely resolution"]
     
 TAROT_BASE="https://raw.githubusercontent.com/hinshalll/text2kprompt/main/tarot/"
-NAV_PAGES=["Dashboard", "Consultation Room", "The Oracle", "Mystic Tarot", "Horoscopes", "Numerology", "Saved Profiles"]
+NAV_PAGES=["Dashboard", "Consultation Room", "The Oracle", "Mystic Tarot", "Horoscopes", "Numerology", "Palm Reading", "Saved Profiles"]
 
 # ═══════════════════════════════════════════════════════════
 # SESSION STATE & QUERY PARAMS (navigation)
@@ -3044,7 +3044,13 @@ def extract_sharpest_frame(video_bytes):
 
     if best_frame is not None:
         best_frame_rgb = cv2.cvtColor(best_frame, cv2.COLOR_BGR2RGB)
-        return PIL.Image.fromarray(best_frame_rgb)
+        pil_img = PIL.Image.fromarray(best_frame_rgb)
+        
+        # Drop brightness by 15% and boost contrast by 50% to make lines POP
+        pil_img = ImageEnhance.Brightness(pil_img).enhance(0.85)
+        pil_img = ImageEnhance.Contrast(pil_img).enhance(1.5)
+        
+        return pil_img
     return None
 
 # --- MODULE B & C: 3D Topography (MediaPipe) ---
@@ -3053,7 +3059,7 @@ def analyze_hand_geometry(pil_image):
     Uses MediaPipe to extract 3D depth (Z-axis), check Mount elevations,
     and generate Sector Cropping boxes for the Vision AI.
     """
-    mp_hands = mp.solutions.hands
+    from mediapipe.python.solutions import hands as mp_hands
     hands = mp_hands.Hands(static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5)
     
     image_np = np.array(pil_image)
