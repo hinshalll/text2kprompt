@@ -5,7 +5,7 @@ geopy
 timezonefinder
 streamlit-local-storage
 opencv-python-headless
-mediapipe
+mediapipe==0.10.21
 numpy
 Pillow
 requests
