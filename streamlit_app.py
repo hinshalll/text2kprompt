@@ -7,10 +7,18 @@ import os
 import requests
 import google.generativeai as genai
 import streamlit.components.v1 as components
+import io
+import json
+import cv2
+import mediapipe as mp
+import numpy as np
+import PIL.Image
+from PIL import ImageEnhance, ImageOps
 import swisseph as swe
 from geopy.geocoders import Nominatim
 from timezonefinder import TimezoneFinder
 from streamlit_local_storage import LocalStorage
+
 
 # ═══════════════════════════════════════════════════════════
 # APP CONFIG
@@ -316,34 +324,16 @@ def get_live_cosmic_weather():
 # ═══════════════════════════════════════════════════════════
 # The AI Engine Helper Function & Auto-Switcher
 # ═══════════════════════════════════════════════════════════
-# ── MODEL ROUTING ────────────────────────────────────────────
-# IMPORTANT: Context window sizes (how many tokens the model can READ at once):
-#   gemini-3.1-flash-lite-preview  → 1,000,000 tokens  ← BEST for big books
-#   gemini-2.5-flash               → 1,000,000 tokens  ← BEST for big books  
-#   gemma-4-31b-it                 →   262,144 tokens  ← Books often EXCEED this → 400 error
-#   gemma-4-26b-a4b-it             →   262,144 tokens  ← Same problem
-#
-# STRATEGY: Always try Flash Lite first (handles big books fine).
-#   Only fall to Gemma 4 as LAST RESORT — it has unlimited TPM but tiny context.
-#   Gemma 4 is useful ONLY for very short prompts (dashboard JSON, no books).
-
-# Primary: Large context window (1M tokens) — handles books without overflowing
-LIGHT_MODELS = [
-    "gemini-3.1-flash-lite-preview",  # 500 RPD, 250K TPM, 1M context — PRIMARY for everything
-    "gemini-2.5-flash",               #  20 RPD, 250K TPM, 1M context — second fallback
+FREE_MODELS = [
+    "gemma-4-31b-it",                   # The Reader (Strict Rules)
+    "gemma-4-26b-a4b-it",                   # The Philosopher (Synthesis & UI)
+    "gemini-3.1-flash-lite-preview"  # The Speed Calculator (KP Math)
 ]
-# Last resort: Small context window (262K tokens) — unlimited TPM but books may overflow it
-HEAVY_MODELS = [
-    "gemma-4-31b-it",       # 1500 RPD, Unlimited TPM, 262K context — last resort
-    "gemma-4-26b-a4b-it",   # 1500 RPD, Unlimited TPM, 262K context — final fallback
-]
-# Default order: always Light first, Gemma 4 only if both Gemini models are rate-limited
-FREE_MODELS = LIGHT_MODELS + HEAVY_MODELS
 
-@st.cache_data(show_spinner=False, ttl=timedelta(hours=24))
+@st.cache_resource(show_spinner=False, ttl=timedelta(hours=24))
 def get_knowledge_files(file_names):
-    """Fetches MD files from GitHub as raw text strings (Faster, bypasses File API limits)."""
-    loaded_texts = []
+    """Fetches MD files from GitHub, uploads to Gemini, and caches them."""
+    uploaded_files = []
     
     for name in file_names:
         try:
@@ -351,19 +341,25 @@ def get_knowledge_files(file_names):
             clean_name = name.strip(" '\n\r")
             github_url = f"https://raw.githubusercontent.com/hinshalll/text2kprompt/main/aiguide/{clean_name}"
             
-            # Fetch the raw markdown text directly from GitHub
+            # 🛠️ FIX 1: Add a 15-second timeout. If it takes longer, fail fast instead of hanging forever.
             response = requests.get(github_url, timeout=15)
             response.raise_for_status() 
             
-            # Wrap the text so the AI knows exactly which book it is reading
-            file_content = f"\n--- START OF REFERENCE BOOK: {clean_name} ---\n{response.text}\n--- END OF REFERENCE BOOK: {clean_name} ---\n"
-            loaded_texts.append(file_content)
+            temp_filename = f"temp_{clean_name}"
+            with open(temp_filename, "w", encoding="utf-8") as f:
+                f.write(response.text)
+                
+            uploaded_file = genai.upload_file(path=temp_filename, display_name=f"KB_{clean_name}", mime_type="text/plain")
+            os.remove(temp_filename)
+            uploaded_files.append(uploaded_file)
             
         except Exception as e:
-            # Raise the exception so Streamlit aborts the cache and tries cleanly next time
+            # 🛠️ FIX 2: Raise the exception! Do NOT just print st.error. 
+            # If we raise an exception, Streamlit aborts the cache. 
+            # This ensures it tries again cleanly next time instead of caching a broken state for 24 hours.
             raise Exception(f"Network error loading {name}. Please check your connection and try again. Details: {e}")
             
-    return loaded_texts
+    return uploaded_files
 
 def get_ai_model_by_name(model_name, custom_system_rules=None):
     """Directly calls a specific model with dynamic system rules, preserving original guardrails."""
@@ -403,92 +399,31 @@ def get_ai_model_by_name(model_name, custom_system_rules=None):
         generation_config=gen_config
     )
 
-def agent_worker(prompt, file_objs, model_id, custom_system_rules=None, retries=3):
-    """
-    Calls a model with exponential backoff. Falls back gracefully on both:
-    - 429 / quota / RESOURCE_EXHAUSTED  (rate limit — wait and retry)
-    - 400 / InvalidArgument / token count (context overflow — skip this model)
-    """
+def agent_worker(prompt, file_objs, model_id, retries=2):
     if not isinstance(file_objs, list): file_objs = [file_objs]
     for attempt in range(retries):
         try:
-            model = get_ai_model_by_name(model_id, custom_system_rules)
+            model = get_ai_model_by_name(model_id)
             return model.generate_content(file_objs + [prompt]).text
         except Exception as e:
-            err_str = str(e)
-            is_rate_limit = any(x in err_str for x in [
-                "429", "quota", "RESOURCE_EXHAUSTED", "rate limit"
-            ])
-            is_token_overflow = any(x in err_str for x in [
-                "400", "InvalidArgument", "token count exceeds", "maximum number of tokens"
-            ])
-            if is_token_overflow:
-                # Context window exceeded — retrying won't help, exit immediately
-                return f"Agent Note: Content too large for {model_id} ({err_str[:80]}). Inferring from raw dossier."
-            elif is_rate_limit and attempt < retries - 1:
-                wait_sec = (2 ** attempt) * 4  # 4s, 8s, 16s
-                time_module.sleep(wait_sec)
-                continue
-            else:
-                # After all retries or unknown error
-                return f"Agent Note: Model {model_id} unavailable ({err_str[:80]}). Inferring from raw dossier."
+            if attempt == retries - 1:
+                return f"Agent Note: Data extraction failed ({str(e)}). Please infer from raw dossier."
+            time_module.sleep(2) # Wait 2 seconds and try again
 
-def generate_content_with_fallback(prompt, knowledge_files=None, preferred_model=None):
-    """
-    Universal model router with automatic fallback and retry.
-    
-    Always tries Flash Lite FIRST (1M context, handles big books).
-    Falls back to Gemma 4 LAST (unlimited TPM, but only 262K context — may still overflow).
-    
-    Triggers fallback on BOTH:
-      - 429 / rate limit  → wait and retry, then move to next model
-      - 400 / token overflow → skip immediately to next model (retrying won't help)
-    """
+def generate_content_with_fallback(prompt, knowledge_files=None, preferred_model="gemini-3.1-flash-lite-preview"):
+    """Global fallback wrapper that prioritizes the MoE model for UI speed."""
     content_to_send = knowledge_files + [prompt] if knowledge_files else [prompt]
-
-    # Always start with the largest-context models (Flash Lite = 1M context)
-    if preferred_model and preferred_model in FREE_MODELS:
-        others = [m for m in FREE_MODELS if m != preferred_model]
-        models_to_try = [preferred_model] + others
-    else:
-        models_to_try = FREE_MODELS  # LIGHT first (1M context), HEAVY last (262K context)
-
-    last_error = None
+    models_to_try = [preferred_model] + [m for m in FREE_MODELS if m != preferred_model]
     for m_name in models_to_try:
-        for attempt in range(3):
-            try:
-                return get_ai_model_by_name(m_name).generate_content(content_to_send).text
-            except Exception as e:
-                err_str = str(e)
-                is_rate_limit = any(x in err_str for x in [
-                    "429", "quota", "RESOURCE_EXHAUSTED", "rate limit"
-                ])
-                is_token_overflow = any(x in err_str for x in [
-                    "400", "InvalidArgument", "token count exceeds", "maximum number of tokens"
-                ])
-                if is_token_overflow:
-                    # No point retrying — content is too big for this model, try next one
-                    last_error = e
-                    break
-                elif is_rate_limit:
-                    if attempt < 2:
-                        time_module.sleep((2 ** attempt) * 3)  # 3s, 6s
-                        continue
-                    else:
-                        last_error = e
-                        break  # Rate limit exhausted for this model, try next
-                else:
-                    # Unknown error — don't retry, don't crash the app
-                    last_error = e
-                    break
-
-    raise Exception(
-        f"All models unavailable. Last error: {last_error}. "
-        "Please wait a few minutes and try again."
-    )
+        try:
+            return get_ai_model_by_name(m_name).generate_content(content_to_send).text
+        except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower(): continue
+            raise e 
+    raise Exception("All free models limits reached.")
 
 @st.cache_data(ttl=timedelta(hours=24), show_spinner=False)
-def generate_western_forecast(sun_sign, today_str):
+def generate_western_forecast(sun_sign, today_str, user_tz):
     # Strictly Daily - no timeframe argument needed
     transits = get_western_transits_today()
     
@@ -521,17 +456,20 @@ def generate_western_forecast(sun_sign, today_str):
 def generate_vedic_forecast(prof_json, timeframe, today_str):
     prof = json.loads(prof_json)
     
-    # 1. PYTHON DOES THE MATH
+    # 1. HARD MATH: Calculate exact future dates based on timeframe
     days_ahead = {"Daily": 0, "Monthly": 15, "Yearly": 180}[timeframe]
+    
     dt_now = datetime.now(ZoneInfo("UTC"))
     target_date = dt_now + timedelta(days=days_ahead)
     jd_target = swe.julday(target_date.year, target_date.month, target_date.day, 12.0)
     
+    # 2. Get Natal Moon
     moon_lon = get_moon_lon_from_profile(prof)
     natal_moon_sidx = sign_index_from_lon(moon_lon)
     rashi = sign_name(natal_moon_sidx)
     
-    transit_lines = [f"LIVE TRANSITS FOR {timeframe.upper()} FORECAST ({target_date.strftime('%d %b %Y')}):"]
+    # 3. Calculate exact future transits from the Natal Moon
+    transit_lines = [f"LIVE TRANSITS FOR {timeframe.upper()} FORECAST (Calculated for: {target_date.strftime('%d %b %Y')}):"]
     for pn in ["Sun", "Moon", "Mars", "Mercury", "Jupiter", "Venus", "Saturn"]:
         t_lon, _ = get_planet_longitude_and_speed(jd_target, PLANETS[pn])
         t_sidx = sign_index_from_lon(t_lon)
@@ -539,46 +477,45 @@ def generate_vedic_forecast(prof_json, timeframe, today_str):
         transit_lines.append(f"  {pn} is transiting House {diff_houses} from Natal Moon (in {sign_name(t_sidx)})")
     
     r_lon = get_rahu_longitude(jd_target)
-    transit_lines.append(f"  Rahu is transiting House {((sign_index_from_lon(r_lon) - natal_moon_sidx) % 12) + 1} from Natal Moon")
+    r_sidx = sign_index_from_lon(r_lon)
+    r_diff = ((r_sidx - natal_moon_sidx) % 12) + 1
+    transit_lines.append(f"  Rahu is transiting House {r_diff} from Natal Moon")
+    
     transit_data = "\n".join(transit_lines)
     
+    # 4. Instruct AI on which planets to analyze
     timeframe_rules = {
         "Daily": "Focus heavily on the Moon's transit and fast-moving planets for immediate 24-hour events.",
-        "Monthly": "Focus on the Sun, Mars, Venus, and Mercury transits to predict themes for the next 30 days.",
-        "Yearly": "Ignore the Moon. Focus EXCLUSIVELY on slow-moving transits of Jupiter, Saturn, and Rahu."
+        "Monthly": "Focus on the Sun, Mars, Venus, and Mercury transits to predict the themes for the next 30 days.",
+        "Yearly": "Ignore the Moon. Focus EXCLUSIVELY on the slow-moving transits of Jupiter, Saturn, and Rahu to predict the macro themes for the year."
     }
     
-    # 2. PROMPT FORCES AI TO READ THE BOOKS
-    prompt = f"""{GUARDRAILS}
-<mission>
-You are an elite Vedic Astrologer. Generate a highly accurate {timeframe} horoscope for a user whose Moon Sign (Rashi) is {rashi}.
-Read the mathematically exact Gochara (transit) data provided below. {timeframe_rules[timeframe]}
-</mission>
-
-<KNOWLEDGE_ROUTING>
-Open `bphs2.md` and read the exact rules for these specific planetary transits from the Natal Moon. 
-Do not invent transit meanings. Rely strictly on the text. Use `iva.md` to format your tone.
-</KNOWLEDGE_ROUTING>
-
-<transit_math>
-{transit_data}
-</transit_math>
-
-<FORMAT>
-Write extremely concise, 1 to 2 sentence summaries for each category. Do not use markdown headers, just output the bold text:
-**General:** (One sentence overall theme)
-**Love & Relationships:** (One sentence romantic forecast)
-**Career & Finance:** (One sentence professional forecast)
-</FORMAT>"""
+    prompt = f"""<instructions>
+    You are an elite Vedic Astrologer. Generate a highly accurate {timeframe} horoscope for a user whose Moon Sign (Rashi) is {rashi}.
+    
+    Read the mathematically exact Gochara (transit) data provided below. 
+    {timeframe_rules[timeframe]}
+    
+    Write extremely concise, 1 to 2 sentence summaries for each category:
+    **General:** (One sentence overall theme)
+    **Love & Relationships:** (One sentence romantic forecast)
+    **Career & Finance:** (One sentence professional forecast)
+    
+    CRITICAL RULES:
+    - Keep it very brief and scannable. MAXIMUM 2 sentences per category.
+    - Ground the interpretation strictly in the provided transit math.
+    - Do not use markdown headers, just output the bold text.
+    </instructions>
+    
+    <transit_math>
+    {transit_data}
+    </transit_math>
+    """
     
     try:
-        # bphs2.md = Dasha effects, Antardasha for all planets — core timing book.
-        # This is what a Vedic horoscope primarily needs (current Dasha period interpretation).
-        # Removing iva.md saves ~254K tokens — prevents TPM overflow on Flash Lite.
-        books = get_knowledge_files(["bphs2.md"])
-        return generate_content_with_fallback(prompt, knowledge_files=books)
+        return generate_content_with_fallback(prompt)
     except Exception:
-        return "**General:** The cosmic connection is resting.\n\n**Love & Relationships:** Try again later.\n\n**Career & Finance:** API limit reached."
+        return f"**General:** The cosmic connection is resting.\n\n**Love & Relationships:** Try again later.\n\n**Career & Finance:** API limit reached."
 
 # ═══════════════════════════════════════════════════════════
 # DAILY CACHE HELPERS
@@ -592,8 +529,8 @@ def fetch_cached_dashboard_data(prof_json, today_str):
     dos = generate_astrology_dossier(prof, False, compact=True)
     transits = get_gochara_overlay(prof)
     prompt = build_dashboard_data_prompt(dos, transits, prof['name'].split()[0])
-    # Dashboard has NO books attached — use light model (preserves Gemma 4 quota for heavy work)
-    res = generate_content_with_fallback(prompt, knowledge_files=None, preferred_model="gemini-3.1-flash-lite-preview")
+
+    res = generate_content_with_fallback(prompt)
     return safe_json(res, {
         "GREETING": f"Welcome back, {prof['name'].split()[0]}. The cosmic connection is catching its breath, but your tools are ready below.",
         "ENERGY": "Mixed",
@@ -615,8 +552,8 @@ RESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN:
         "MANTRA": "A short, powerful affirmation."
     }"""
     dash_tarot_file = get_knowledge_files(["tguide.md"])
-    # Let the router pick — Flash Lite (1M context) handles tguide.md fine
-    res = generate_content_with_fallback(json_prompt, knowledge_files=dash_tarot_file)
+    # SPEED OPTIMIZATION: Instant Tarot reveals
+    res = generate_content_with_fallback(json_prompt, knowledge_files=dash_tarot_file, preferred_model="gemini-3.1-flash-lite-preview")
     return safe_json(res, {
         "MEANING": "Trust the process unfolding today.",
         "ACTION": "Observe before making any sudden moves.",
@@ -626,127 +563,72 @@ RESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN:
 # ═══════════════════════════════════════════════════════════
 # THE UNIVERSAL AI CHAT ENGINE
 # ═══════════════════════════════════════════════════════════
-def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting...", knowledge_files=None, preferred_model=None):
-    """
-    Universal streaming AI component with full fallback chain.
-    
-    Model order: Flash Lite → Gemini 2.5 Flash → Gemma 4 31B → Gemma 4 26B
-    Flash Lite has 1M context so it handles books fine.
-    Gemma 4 is last resort (only 262K context — books often overflow it).
-    Falls back on BOTH 429 (rate limit) AND 400 (token overflow).
-    """
+def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting...", knowledge_files=None, preferred_model="gemini-3.1-flash-lite-preview"):
+    """A universal component that streams AI text and handles follow-up chats."""
     st.markdown("---")
     st.markdown("### ✨ AI Reading")
-
+    
     content_to_send = knowledge_files + [prompt] if knowledge_files else [prompt]
-    newly_generated = False
-
-    # Always try Flash Lite first — it has 1M context and handles all book sizes
-    if preferred_model and preferred_model in FREE_MODELS:
-        models_for_initial = [preferred_model] + [m for m in FREE_MODELS if m != preferred_model]
-    else:
-        models_for_initial = FREE_MODELS  # Light (1M ctx) first, Heavy (262K ctx) last
-
-    # ── STEP 1: GENERATE THE MAIN READING ──
+    newly_generated = False # 🛠️ Track if we just made a new reading
+    
+    # 1. First run: Generate the main reading
     if memory_key not in st.session_state or len(st.session_state[memory_key]) == 0:
         st.session_state[memory_key] = []
-        newly_generated = True
-
-        with st.chat_message("assistant"):
+        newly_generated = True # 🛠️ Flag that we are generating right now
+        
+        with st.chat_message("assistant"): # 🛠️ Output directly into a chat bubble
             res_ph = st.empty()
             with st.spinner(spinner_text):
-                success = False
-                for m_id in models_for_initial:
-                    if success: break
-                    for attempt in range(3):
-                        try:
-                            model = get_ai_model_by_name(m_id)
-                            chat = model.start_chat(history=[])
-                            response = chat.send_message(content_to_send, stream=True)
-                            f_res = ""
-                            for chunk in response:
-                                f_res += chunk.text
-                                res_ph.markdown(f_res + "▌")
-                            res_ph.markdown(f_res)
-                            # Save only text to history — not the heavy book files
-                            st.session_state[memory_key].append({"role": "user", "parts": [prompt]})
-                            st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
-                            success = True
-                            break
-                        except Exception as e:
-                            err_str = str(e)
-                            is_rate = any(x in err_str for x in [
-                                "429", "quota", "RESOURCE_EXHAUSTED", "rate limit"
-                            ])
-                            is_overflow = any(x in err_str for x in [
-                                "400", "InvalidArgument", "token count exceeds", "maximum number of tokens"
-                            ])
-                            if is_overflow:
-                                break  # This model can't handle the size — try next immediately
-                            elif is_rate and attempt < 2:
-                                time_module.sleep((2 ** attempt) * 3)
-                                continue
-                            else:
-                                break  # Move to next model
-
-                if not success:
-                    res_ph.warning(
-                        "⏳ All AI models are briefly at capacity or the content is too large. "
-                        "Please wait a moment and try again."
-                    )
+                try:
+                    model = get_ai_model_by_name(preferred_model)
+                    chat = model.start_chat(history=[])
+                    response = chat.send_message(content_to_send, stream=True)
+                    f_res = ""
+                    for chunk in response:
+                        f_res += chunk.text
+                        res_ph.markdown(f_res + "▌")
+                    res_ph.markdown(f_res)
+                    
+                    # 🛠️ HISTORY BLOAT FIX: Save ONLY the text prompt to memory, NOT the heavy files!
+                    st.session_state[memory_key].append({"role": "user", "parts": [prompt]})
+                    st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
+                except Exception as e:
+                    st.error(f"API Error: {e}")
                     return
 
-    # ── STEP 2: RENDER EXISTING CHAT HISTORY ──
+    # 2. Render existing chat history
+    # 🛠️ CRITICAL FIX: Only render history if we didn't JUST generate the first message!
     if len(st.session_state[memory_key]) > 0 and not newly_generated:
         for i, msg in enumerate(st.session_state[memory_key]):
-            if i == 0: continue
+            if i == 0: continue 
             role = "assistant" if msg["role"] == "model" else "user"
             with st.chat_message(role):
-                st.markdown(msg["parts"][-1])
+                display_text = msg["parts"][-1]
+                st.markdown(display_text)
 
-    # ── STEP 3: FOLLOW-UP CHAT (text only — no books — Flash Lite is fine) ──
+    # 3. Follow-up Chat Box
     if follow_up := st.chat_input("Ask a follow-up question...", key=f"chatin_{memory_key}"):
         with st.chat_message("user"):
             st.markdown(follow_up)
-
+            
         with st.chat_message("assistant"):
             res_ph = st.empty()
             with st.spinner("Thinking..."):
-                success = False
-                for m_id in FREE_MODELS:  # Light first for follow-ups (text only, no books)
-                    if success: break
-                    for attempt in range(3):
-                        try:
-                            model = get_ai_model_by_name(m_id)
-                            chat = model.start_chat(history=st.session_state[memory_key])
-                            res = chat.send_message(follow_up, stream=True)
-                            f_res = ""
-                            for chunk in res:
-                                f_res += chunk.text
-                                res_ph.markdown(f_res + "▌")
-                            res_ph.markdown(f_res)
-                            st.session_state[memory_key].append({"role": "user", "parts": [follow_up]})
-                            st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
-                            success = True
-                            st.rerun()
-                            break
-                        except Exception as e:
-                            err_str = str(e)
-                            is_rate = any(x in err_str for x in [
-                                "429", "quota", "RESOURCE_EXHAUSTED", "rate limit"
-                            ])
-                            is_overflow = any(x in err_str for x in [
-                                "400", "InvalidArgument", "token count exceeds", "maximum number of tokens"
-                            ])
-                            if is_overflow or (not is_rate):
-                                break
-                            elif is_rate and attempt < 2:
-                                time_module.sleep((2 ** attempt) * 3)
-                                continue
-                            else:
-                                break
-                if not success:
-                    res_ph.warning("⏳ Models are briefly at capacity. Please try your follow-up again in a moment.")
+                try:
+                    model = get_ai_model_by_name(preferred_model)
+                    chat = model.start_chat(history=st.session_state[memory_key])
+                    res = chat.send_message(follow_up, stream=True)
+                    f_res = ""
+                    for chunk in res:
+                        f_res += chunk.text
+                        res_ph.markdown(f_res + "▌")
+                    res_ph.markdown(f_res)
+                    
+                    st.session_state[memory_key].append({"role": "user", "parts": [follow_up]})
+                    st.session_state[memory_key].append({"role": "model", "parts": [f_res]})
+                    st.rerun()
+                except Exception as e:
+                    res_ph.error(f"API Error: {e}")
 
 # ═══════════════════════════════════════════════════════════
 # ADVANCED ASTRO ENGINES
@@ -784,9 +666,7 @@ def get_conjunctions(ls,planet_data,r_lon,k_lon):
     for pn,plon in [("Rahu",r_lon),("Ketu",k_lon)]: h=whole_sign_house(ls,sign_index_from_lon(plon)); all_p.setdefault(h,[]).append(pn)
     return [f"{' + '.join(plist)} conjunct in H{h} ({sign_name((ls+h-1)%12)})" for h,plist in all_p.items() if len(plist)>=2]
 def get_mutual_aspects(ls,planet_data,r_lon,k_lon):
-    # Parashari special aspects: Mars=4,7,8 | Jupiter=5,7,9 | Saturn=3,7,10
-    # Rahu/Ketu: 7th aspect ONLY in Parashari (5th/9th is KP convention, not mixed here)
-    spec={"Mars":[4,7,8],"Jupiter":[5,7,9],"Saturn":[3,7,10],"Rahu":[7],"Ketu":[7]}
+    spec={"Mars":[4,7,8],"Jupiter":[5,7,9],"Saturn":[3,7,10],"Rahu":[5,7,9],"Ketu":[5,7,9]}
     def asp(pn,h): return {((h+j-2)%12)+1 for j in spec.get(pn,[7])}
     houses={pn:whole_sign_house(ls,sign_index_from_lon(planet_data[pn][0])) for pn in planet_data}
     houses["Rahu"]=whole_sign_house(ls,sign_index_from_lon(r_lon))
@@ -819,8 +699,7 @@ def get_functional_planets(ls):
     for h in range(1,13): lord=SIGN_LORDS_MAP[(ls+h-1)%12]; house_lords.setdefault(lord,[]).append(h)
     yks=[]; bens=[]; mals=[]; neu=[]
     for planet,houses in house_lords.items():
-        has_tri=any(h in trikona for h in houses)
-        has_ken=any(h in kendra for h in houses)  # H1 IS a Kendra — Lagna lord ruling H1+H5 = Yogakaraka
+        has_tri=any(h in trikona for h in houses); has_ken=any(h in kendra and h!=1 for h in houses)
         has_trika=any(h in trika for h in houses)
         if has_tri and has_ken: yks.append(planet)
         elif has_tri: bens.append(planet)
@@ -828,10 +707,10 @@ def get_functional_planets(ls):
         else: neu.append(planet)
     return bens,mals,yks,neu
 def get_house_strength_summary(ls,planet_data,r_lon,k_lon,placidus_cusps):
+    # 🛠️ ASTRO UPGRADE: Added H1, H6, H8, H9, and H12 to calculate all areas of life.
     key_houses={
         1:("Self & Vitality",{1,11}),
         2:("Wealth & Family",{2,11}),
-        3:("Siblings, Courage & Communication",{3,6,11}),
         4:("Home & Happiness",{4,11}),
         5:("Intelligence & Children",{5,11}),
         6:("Health & Struggles",{6,11}),
@@ -881,129 +760,17 @@ def check_neecha_bhanga(pname,ls,moon_sidx,planet_data,r_lon,k_lon):
     if exl:
         h=hf(ls,exl)
         if h in kendra: conds.append(f"exaltation-sign lord ({exl}) in Kendra H{h} from Lagna")
-    # Condition: debilitated planet itself in Kendra from Moon
     hfm=whole_sign_house(moon_sidx,p_sidx)
     if hfm in kendra: conds.append(f"debilitated planet in Kendra H{hfm} from Moon")
-    # Condition: debilitated planet itself in Kendra from Lagna (classical 5th condition)
-    hfl=whole_sign_house(ls,p_sidx)
-    if hfl in kendra: conds.append(f"debilitated planet in Kendra H{hfl} from Lagna")
     return conds if conds else None
 def get_chara_karakas(planet_data):
-    # Full 7-karaka chain per Jaimini (excludes Rahu — standard Parashari Jaimini system)
-    planets_for_ck = ["Sun","Moon","Mars","Mercury","Jupiter","Venus","Saturn"]
-    deg = {pn: planet_data[pn][0] % 30 for pn in planets_for_ck}
-    ranked = sorted(deg, key=deg.get, reverse=True)
-    karaka_names = ["Atmakaraka (AK)","Amatyakaraka (AmK)","Bhratrukaraka (BK)",
-                    "Matrukaraka (MK)","Pitrukaraka (PiK)","Putrakaraka (PuK)","Darakaraka (DK)"]
-    karaka_chain = {karaka_names[i]: (ranked[i], round(deg[ranked[i]],2)) for i in range(len(ranked))}
-    ak, ak_deg = ranked[0], deg[ranked[0]]
-    amk, amk_deg = ranked[1], deg[ranked[1]]
-    return ak, ak_deg, amk, amk_deg, karaka_chain
-
-def calculate_ashtakavarga(ls, planet_data, r_lon, k_lon):
-    """
-    Calculates Bhinnashtakavarga (BAV) for all 7 planets.
-    Each planet casts benefic bindus to houses based on classical SAV rules.
-    Returns: dict of planet -> list of 12 bindu counts (H1 to H12)
-    """
-    # Classical contributing positions for each planet's BAV
-    # Format: {planet: [offsets from which positions contribute a bindu]}
-    # Offsets are house counts from each planet's own position that contribute
-    # This is the standard Parashari table from BPHS
-    BAV_RULES = {
-        "Sun":     [1,2,4,7,8,9,10,11],    # from Sun
-        "Moon":    [3,6,10,11],             # from Moon; also from Sun: [1,3,6,7,8,10,11]
-        "Mars":    [1,2,4,7,8,10,11],
-        "Mercury": [1,3,5,6,9,10,11,12],
-        "Jupiter": [1,2,3,4,7,8,10,11],
-        "Venus":   [1,2,3,4,5,8,9,11,12],
-        "Saturn":  [3,5,6,11],
-    }
-    # Houses where each planet contributes from EACH of the 8 reference points
-    # Reference points: Sun, Moon, Mars, Mercury, Jupiter, Venus, Saturn, Lagna
-    FULL_BAV = {
-        "Sun": {
-            "Sun":[1,2,4,7,8,9,10,11], "Moon":[3,6,10,11], "Mars":[1,2,4,7,8,10,11],
-            "Mercury":[3,5,6,9,12], "Jupiter":[5,6,9,11], "Venus":[6,7,12],
-            "Saturn":[1,2,4,7,8,10,11], "Lagna":[3,4,6,10,11,12]
-        },
-        "Moon": {
-            "Sun":[3,6,10,11], "Moon":[1,3,6,7,10,11], "Mars":[2,3,5,6,9,10,11],
-            "Mercury":[1,3,4,5,7,8,10,11], "Jupiter":[1,4,7,8,10,11,12],
-            "Venus":[3,4,5,7,9,10,11], "Saturn":[3,5,6,11], "Lagna":[3,6,10,11]
-        },
-        "Mars": {
-            "Sun":[3,5,6,10,11], "Moon":[3,6,11], "Mars":[1,2,4,7,8,10,11],
-            "Mercury":[3,5,6,11], "Jupiter":[6,10,11,12], "Venus":[6,8,11,12],
-            "Saturn":[1,4,7,8,9,10,11], "Lagna":[1,2,4,7,8,10,11]
-        },
-        "Mercury": {
-            "Sun":[5,6,9,11], "Moon":[2,4,6,8,10,11], "Mars":[1,2,4,7,8,9,10,11],
-            "Mercury":[1,3,5,6,9,10,11,12], "Jupiter":[6,8,11,12],
-            "Venus":[1,2,3,4,5,8,9,11], "Saturn":[1,2,4,7,8,9,10,11], "Lagna":[1,2,4,6,8,10,11]
-        },
-        "Jupiter": {
-            "Sun":[1,2,3,4,7,8,9,10,11], "Moon":[2,5,7,9,11],
-            "Mars":[1,2,4,7,8,10,11], "Mercury":[1,2,4,5,6,9,10,11],
-            "Jupiter":[1,2,3,4,7,8,10,11], "Venus":[2,5,6,9,10,11],
-            "Saturn":[3,5,6,11], "Lagna":[1,2,4,5,6,7,9,10,11]
-        },
-        "Venus": {
-            "Sun":[8,11,12], "Moon":[1,2,3,4,5,8,9,11,12],
-            "Mars":[3,4,6,9,11,12], "Mercury":[3,5,6,9,11],
-            "Jupiter":[5,8,9,10,11], "Venus":[1,2,3,4,5,8,9,11,12],
-            "Saturn":[3,4,5,8,9,10,11], "Lagna":[1,2,3,4,5,8,9,11]
-        },
-        "Saturn": {
-            "Sun":[1,2,4,7,8,10,11], "Moon":[3,6,11],
-            "Mars":[3,5,6,10,11,12], "Mercury":[6,8,9,12],
-            "Jupiter":[5,6,11,12], "Venus":[6,11,12],
-            "Saturn":[3,5,6,11], "Lagna":[1,3,4,6,10,11]
-        },
-    }
-
-    def get_ref_house(ref_name):
-        if ref_name == "Lagna": return ls
-        lon = get_planet_lon_helper(ref_name, planet_data, r_lon, k_lon)
-        return sign_index_from_lon(lon) if lon is not None else ls
-
-    bav = {}
-    for planet, rules in FULL_BAV.items():
-        bindus = [0] * 12
-        ref_names = ["Sun","Moon","Mars","Mercury","Jupiter","Venus","Saturn","Lagna"]
-        for ref in ref_names:
-            ref_sidx = get_ref_house(ref)
-            offsets = rules.get(ref, [])
-            for offset in offsets:
-                target_sidx = (ref_sidx + offset - 1) % 12
-                target_house = whole_sign_house(ls, target_sidx)
-                bindus[target_house - 1] += 1
-        bav[planet] = bindus
-    return bav
-
-def format_ashtakavarga_summary(bav, ls):
-    """Formats Ashtakavarga into a compact dossier string for AI use."""
-    lines = ["ASHTAKAVARGA (Planetary Strength per House — bindus/8):"]
-    total_sav = [0] * 12
-    for planet, bindus in bav.items():
-        for i in range(12): total_sav[i] += bindus[i]
-        house_str = " ".join(f"H{i+1}:{bindus[i]}" for i in range(12))
-        lines.append(f"  {planet:9s}: {house_str}")
-    sav_str = " ".join(f"H{i+1}:{total_sav[i]}" for i in range(12))
-    lines.append(f"  SAV TOTAL: {sav_str}  (28+ = strong house, <25 = weak house)")
-    # Flag notably strong/weak houses
-    strong = [f"H{i+1}({total_sav[i]})" for i in range(12) if total_sav[i] >= 30]
-    weak   = [f"H{i+1}({total_sav[i]})" for i in range(12) if total_sav[i] <= 22]
-    if strong: lines.append(f"  STRONG HOUSES (≥30 SAV bindus): {', '.join(strong)}")
-    if weak:   lines.append(f"  WEAK HOUSES (≤22 SAV bindus):   {', '.join(weak)}")
-    return "\n".join(lines)
+    deg={pn:planet_data[pn][0]%30 for pn in ["Sun","Moon","Mars","Mercury","Jupiter","Venus","Saturn"]}
+    ranked=sorted(deg,key=deg.get,reverse=True)
+    return ranked[0],deg[ranked[0]],ranked[1],deg[ranked[1]]
 def detect_yogas(ls,moon_sidx,planet_data,r_lon,k_lon):
     def ho(pn):
         lon=get_planet_lon_helper(pn,planet_data,r_lon,k_lon)
         return whole_sign_house(ls,sign_index_from_lon(lon)) if lon else None
-    def si(pn):
-        lon=get_planet_lon_helper(pn,planet_data,r_lon,k_lon)
-        return sign_index_from_lon(lon) if lon is not None else None
     def ink(h1,h2): return (h2-h1)%12 in {0,3,6,9}
     yogas=[]; absent=[]
     mh,jh=ho("Moon"),ho("Jupiter")
@@ -1035,46 +802,15 @@ def detect_yogas(ls,moon_sidx,planet_data,r_lon,k_lon):
                 if th and kh and th==kh: rj.append(f"{tl}+{kl} in H{th}")
     if rj: yogas.append(("Raja Yoga",f"Trikona+Kendra lords conjunct: {'; '.join(rj[:2])} — power, high status"))
     else: absent.append("Raja Yoga — no Trikona+Kendra lord conjunction")
-
-    # ── DHARMA-KARMA ADHIPATI YOGA (9th lord + 10th lord) ──
-    h9_lord = SIGN_LORDS_MAP[(ls+8)%12]; h10_lord = SIGN_LORDS_MAP[(ls+9)%12]
-    if h9_lord != h10_lord:
-        h9h = ho(h9_lord); h10h = ho(h10_lord)
-        if h9h and h10h and h9h == h10h:
-            yogas.append(("Dharma-Karma Adhipati Yoga", f"9th lord ({h9_lord}) + 10th lord ({h10_lord}) conjunct H{h9h} — peak career success, dharmic profession"))
-        else:
-            absent.append(f"Dharma-Karma Adhipati Yoga — H9 lord ({h9_lord}) and H10 lord ({h10_lord}) not conjunct")
-    
-    # ── PARIVARTANA YOGA (mutual sign exchange) ──
-    para=[]
-    all_planets_para=["Sun","Moon","Mars","Mercury","Jupiter","Venus","Saturn"]
-    for i,p1 in enumerate(all_planets_para):
-        for p2 in all_planets_para[i+1:]:
-            s1=si(p1); s2=si(p2)
-            if s1 is None or s2 is None: continue
-            # p1 in sign of p2 AND p2 in sign of p1
-            p1_in_p2_sign = p2 in OWN_SIGNS and s1 in OWN_SIGNS[p2]
-            p2_in_p1_sign = p1 in OWN_SIGNS and s2 in OWN_SIGNS[p1]
-            if p1_in_p2_sign and p2_in_p1_sign:
-                h1=ho(p1); h2=ho(p2)
-                para.append(f"{p1}(H{h1})↔{p2}(H{h2})")
-    if para: yogas.append(("Parivartana Yoga",f"Mutual sign exchange: {'; '.join(para)} — planets act as if conjunct, mutually empowered"))
-    
     dust_lords=[SIGN_LORDS_MAP[(ls+h-1)%12] for h in [6,8,12]]
     dust_in=[dl for dl in dust_lords if ho(dl) in {6,8,12}]
     if len(dust_in)>=2: yogas.append(("Viparita Raja Yoga",f"Dusthana lords ({', '.join(dust_in)}) in dusthana — rise after adversity"))
     else: absent.append("Viparita Raja Yoga — insufficient dusthana lords in dusthana")
-    
-    # ── KEMADRUMA YOGA — with correct cancellation check ──
     if mh2:
         h2m=((mh2-1+1)%12)+1; h12m=((mh2-1-1)%12)+1
         all_h={pn:ho(pn) for pn in list(planet_data.keys())+["Rahu","Ketu"] if pn!="Moon"}
         flanking=[pn for pn,h in all_h.items() if h in {h2m,h12m} and pn not in {"Rahu","Ketu"}]
-        moon_in_kendra = mh2 in {1,4,7,10}  # Moon in Kendra cancels Kemadruma
-        if not flanking and not moon_in_kendra:
-            yogas.append(("Kemadruma Yoga (Negative)",f"No planets flanking Moon in H{h2m}/H{h12m}, Moon not in Kendra — emotional isolation tendency"))
-        elif not flanking and moon_in_kendra:
-            absent.append(f"Kemadruma Yoga CANCELLED — Moon in Kendra H{mh2} (classical cancellation)")
+        if not flanking: yogas.append(("Kemadruma Yoga (Negative)",f"No planets flanking Moon in H{h2m}/H{h12m} — emotional isolation tendency"))
     return yogas,absent
 def calculate_sade_sati(natal_moon_sidx):
     utc=datetime.now(ZoneInfo("UTC"))
@@ -1187,20 +923,13 @@ def get_antardasha_table(di):
         cursor=ad_end
     return lines
 def d2_si(lon):
-    # BPHS: In odd signs, 1st half (0-15°) = Sun (Leo=4), 2nd half (15-30°) = Moon (Cancer=3)
-    # In even signs, 1st half = Moon (Cancer=3), 2nd half = Sun (Leo=4)
-    s = sign_index_from_lon(lon); d = lon % 30
-    if s % 2 == 0:  # odd sign (0-indexed: Aries=0, Gemini=2... are even indices = odd signs)
-        return 4 if d < 15 else 3  # Aries,Gemini,Leo,Libra,Sag,Aquarius: 1st half=Sun, 2nd=Moon
-    else:
-        return 3 if d < 15 else 4  # Taurus,Cancer,Virgo,Scorpio,Cap,Pisces: 1st half=Moon, 2nd=Sun
+    s=sign_index_from_lon(lon); d=lon%30
+    return (4 if d<15 else 3) if s%2==0 else (3 if d<15 else 4)
 def d3_si(lon): return (sign_index_from_lon(lon)+int((lon%30)//10)*4)%12
 def d4_si(lon): return (sign_index_from_lon(lon)+int((lon%30)//7.5)*3)%12
 def d7_si(lon):
-    # BPHS: For odd signs, count from the sign itself. For even signs, count from 7th from it.
-    s = sign_index_from_lon(lon); slot = int((lon % 30) // (30 / 7))
-    start = s if s % 2 == 0 else (s + 6) % 12  # odd sign(0-indexed even)=self; even sign=+6(7th)
-    return (start + slot) % 12
+    s=sign_index_from_lon(lon); slot=int((lon%360%30)//(30/7))
+    return ((s if s%2==0 else (s+6)%12)+slot)%12
 def d9_si(lon):
     s=sign_index_from_lon(lon); slot=int((lon%360%30)//(30/9))
     start=s if s in MOVABLE_SIGNS else ((s+8)%12 if s in FIXED_SIGNS else (s+4)%12)
@@ -1209,15 +938,7 @@ def d10_si(lon):
     s=sign_index_from_lon(lon); slot=int((lon%360%30)//3)
     return ((s if s%2==0 else (s+8)%12)+slot)%12
 def d12_si(lon): return (sign_index_from_lon(lon)+int((lon%360%30)//2.5))%12
-def d60_si(lon):
-    # BPHS D60: each sign divided into 60 parts of 0.5° each.
-    # The 60 parts cycle through all 12 signs 5 times (12×5=60).
-    # Odd signs count forward from Aries; even signs count backward from Pisces.
-    s = sign_index_from_lon(lon); part = int((lon % 30) / 0.5)  # 0-59
-    if s % 2 == 0:  # odd sign (0-indexed): count forward from Aries
-        return part % 12
-    else:           # even sign: count backward from Pisces
-        return (11 - (part % 12)) % 12
+def d60_si(lon): return (sign_index_from_lon(lon)+int((lon%30)*2))%12
 def get_moon_lon_from_profile(profile):
     d=date.fromisoformat(profile['date']) if isinstance(profile['date'],str) else profile['date']
     t=(datetime.strptime(profile['time'],"%H:%M").time() if isinstance(profile['time'],str) else profile['time'])
@@ -1327,7 +1048,7 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
     f_ben,f_mal,yogak,f_neu=get_functional_planets(ls)
     manglik=check_manglik_dosha(ls,moon_sidx,mars_sidx)
     sade_sati=calculate_sade_sati(moon_sidx)
-    ak,ak_deg,amk,amk_deg,karaka_chain=get_chara_karakas(planet_data)
+    ak,ak_deg,amk,amk_deg=get_chara_karakas(planet_data)
     yogas_present,yogas_absent=detect_yogas(ls,moon_sidx,planet_data,r_lon,k_lon)
     ad_table=get_antardasha_table(dasha_info)
     house_summary=get_house_strength_summary(ls,planet_data,r_lon,k_lon,placidus_cusps)
@@ -1366,14 +1087,7 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
         if pspd<0 and pname not in ["Sun","Moon"]: tags.append("Retrograde")
         if pname in COMBUST_DEGREES:
             diff=min(abs(plon-planet_data["Sun"][0]),360-abs(plon-planet_data["Sun"][0]))
-            # Mercury and Venus have different combust orbs when retrograde vs direct
-            if pname == "Mercury":
-                orb = 14 if pspd < 0 else 12  # Retrograde: 14°, Direct: 12°
-            elif pname == "Venus":
-                orb = 16 if pspd < 0 else 8   # Retrograde: 16°, Direct: 8°
-            else:
-                orb = COMBUST_DEGREES[pname]
-            if diff <= orb: tags.append(f"Combust({orb}°orb)")
+            if diff<=COMBUST_DEGREES[pname]: tags.append("Combust")
         if pname in DIGNITIES:
             if sidx==DIGNITIES[pname][0]: tags.append("Exalted")
             elif sidx==DIGNITIES[pname][1]: tags.append("Debilitated")
@@ -1448,15 +1162,9 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
     if not yogas_present: lines.append("  None detected.")
     lines.append("[Yogas — ABSENT ✗ — do NOT mention these]")
     for ya in yogas_absent: lines.append(f"  ✗ {ya}")
-    lines.append(f"[Jaimini Chara Karakas — Full Chain]")
-    for kname,(kplanet,kdeg) in karaka_chain.items():
-        lines.append(f"  {kname}: {kplanet} ({kdeg:.2f}°)")
+    lines.append(f"[Jaimini Karakas]\n  Atmakaraka: {ak} ({ak_deg:.2f}°) | Amatyakaraka: {amk} ({amk_deg:.2f}°)")
     lines.append(f"\nHOUSE STRENGTH SUMMARY (pre-computed, use directly):")
     for hs in house_summary: lines.append(f"  {hs}")
-    if not compact:
-        # Ashtakavarga — full calculation
-        bav = calculate_ashtakavarga(ls, planet_data, r_lon, k_lon)
-        lines.append(f"\n{format_ashtakavarga_summary(bav, ls)}")
     lines.append(f"\nHOUSE RULERSHIP MAP:")
     for h in range(1,13):
         h_sidx=(ls+h-1)%12; h_lord=SIGN_LORDS_MAP[h_sidx]
@@ -1526,91 +1234,6 @@ def get_gochara_overlay(profile):
         lines.append(f"  Transit {pn}: {sign_name(sign_index_from_lon(tl))} H{th} (was H{nh} at birth, {diff_houses} houses moved)")
     lines.append(f"  Transit Rahu: {sign_name(sign_index_from_lon(transit_r))} H{whole_sign_house(ls,sign_index_from_lon(transit_r))}")
     return "\n".join(lines)
-
-import re
-
-# ═══════════════════════════════════════════════════════════
-# THE UNIVERSAL PYTHON MATH ENGINE (THE OBSERVATORY)
-# ═══════════════════════════════════════════════════════════
-def extract_base_score(dossier_text, house_number):
-    """Python reads the generated dossier to find the exact numerical score."""
-    match = re.search(rf"H{house_number} \([^)]+\):.*?Base Score: (\d)", dossier_text)
-    return int(match.group(1)) if match else 1
-
-def extract_yogas(dossier_text):
-    """Python counts the exact number of active yogas."""
-    if "[Yogas — PRESENT ✓]" not in dossier_text: return 0
-    try:
-        yogas_section = dossier_text.split("[Yogas — PRESENT ✓]")[1].split("[Yogas — ABSENT ✗")[0]
-        return yogas_section.count("✓")
-    except: return 0
-
-def check_affliction(dossier_text, affliction_type):
-    """Python flags penalties like Sade Sati."""
-    if affliction_type == "Sade Sati": return "Sade Sati: ACTIVE" in dossier_text
-    elif "Graha Yuddha" in affliction_type: return "WINS (higher ecliptic latitude)" in dossier_text
-    return False
-
-def get_prashna_python_verdict(question, dossier_text):
-    """Python routes the horary question to a house and calculates the definitive YES/NO."""
-    q_lower = question.lower()
-    house = 1
-    if any(w in q_lower for w in ["job", "career", "promotion", "business", "work"]): house = 10
-    elif any(w in q_lower for w in ["love", "marry", "relationship", "partner"]): house = 7
-    elif any(w in q_lower for w in ["money", "wealth", "finance", "buy", "invest"]): house = 2
-    elif any(w in q_lower for w in ["health", "sick", "recover", "surgery"]): house = 6
-    elif any(w in q_lower for w in ["child", "kid", "pregnancy"]): house = 5
-    elif any(w in q_lower for w in ["travel", "visa", "abroad"]): house = 9
-    elif any(w in q_lower for w in ["house", "property", "home", "vehicle"]): house = 4
-    
-    score = extract_base_score(dossier_text, house)
-    if score == 3: return "YES", f"The relevant house (H{house}) is mathematically STRONGLY PROMISED (Base Score 3/3)."
-    elif score == 2: return "DELAYED / PARTIAL", f"The relevant house (H{house}) is only WEAKLY PROMISED (Base Score 2/3)."
-    else: return "NO", f"The relevant house (H{house}) lacks mathematical promise (Base Score 1/3)."
-
-def calculate_matchmaking_synastry(dos_a, dos_b):
-    """Python compares the structural promises of both charts directly."""
-    h7_a = extract_base_score(dos_a, 7); h7_b = extract_base_score(dos_b, 7)
-    h8_a = extract_base_score(dos_a, 8); h8_b = extract_base_score(dos_b, 8)
-    
-    promise_match = "ALIGNED" if abs(h7_a - h7_b) <= 1 else "DANGEROUS MISMATCH"
-    longevity_match = "STABLE" if h8_a >= 2 and h8_b >= 2 else "VULNERABLE"
-    
-    return f"H7 Marriage Promise: Person 1 ({h7_a}/3) vs Person 2 ({h7_b}/3) -> {promise_match}\nH8 Bond Longevity: Person 1 ({h8_a}/3) vs Person 2 ({h8_b}/3) -> {longevity_match}"
-
-def calculate_and_rank_profiles(profiles_dossiers, criteria):
-    """Python calculates all scores, applies penalties, and creates the definitive ranked list."""
-    results = {c: [] for c in criteria}
-    for name, dossier in profiles_dossiers:
-        scores = {}
-        yogas = extract_yogas(dossier)
-        ss_penalty = 1 if check_affliction(dossier, "Sade Sati") else 0
-        
-        scores["Wealth Potential"] = extract_base_score(dossier, 2) + extract_base_score(dossier, 11) + (0.5 * yogas)
-        scores["Relationship Quality"] = extract_base_score(dossier, 7) + extract_base_score(dossier, 5) + (0.5 * yogas)
-        scores["Career Success"] = extract_base_score(dossier, 10) + extract_base_score(dossier, 6) + (0.5 * yogas)
-        scores["Happiness & Contentment"] = extract_base_score(dossier, 4) + extract_base_score(dossier, 5) + (0.5 * yogas)
-        scores["Luck & Fortune"] = extract_base_score(dossier, 9) + extract_base_score(dossier, 11) + (0.5 * yogas)
-        scores["Spiritual Depth"] = extract_base_score(dossier, 12) + extract_base_score(dossier, 9) + (0.5 * yogas)
-        scores["Health & Longevity"] = extract_base_score(dossier, 1) + extract_base_score(dossier, 8) + extract_base_score(dossier, 6)
-        
-        # INVERTED (Higher score = worse outcome)
-        scores["Life Struggles"] = extract_base_score(dossier, 6) + extract_base_score(dossier, 8) + ss_penalty
-        scores["Hidden Pitfalls"] = extract_base_score(dossier, 8) + extract_base_score(dossier, 12) + ss_penalty
-        
-        for c in criteria:
-            base_c = c.split(" — ")[0]
-            if base_c in scores: results[c].append({"name": name, "score": scores[base_c]})
-
-    final_rankings = ""
-    for c in criteria:
-        is_bad_trait = "Struggles" in c or "Pitfalls" in c
-        # Reverse is False for bad traits because lowest score = 1st place
-        sorted_profiles = sorted(results[c], key=lambda x: x["score"], reverse=not is_bad_trait)
-        final_rankings += f"\nParameter: {c}\n"
-        for i, p in enumerate(sorted_profiles):
-            final_rankings += f"Rank {i+1}: {p['name']} (Score: {p['score']})\n"
-    return final_rankings
 
 # ═══════════════════════════════════════════════════════════
 # GUARDRAILS: Universal Interpretation Protocol
@@ -1699,92 +1322,138 @@ Deliver a complete, deeply insightful life reading. Each section MUST cite speci
 {dossier}
 </user_chart_data>"""
 
-def build_matchmaking_prompt(dos_a, dos_b, koota, manglik_canc):
-    # 1. PYTHON PRE-COMPUTES THE SYNASTRY
-    py_synastry = calculate_matchmaking_synastry(dos_a, dos_b)
-    
+def build_matchmaking_prompt(dos_a,dos_b,koota,manglik_canc):
     return f"""{GUARDRAILS}
+
 <mission>
-You are an elite Vedic Matchmaker. Perform a definitive compatibility analysis.
+You are an elite Vedic Matchmaker. Perform a definitive, multi-layered compatibility analysis between Person 1 and Person 2.
 </mission>
 
 <KNOWLEDGE_ROUTING>
-- Open `bphs1.md` to analyze synastry, elemental balance, and the Karakas (Venus/Jupiter).
-- Open `bphs2.md` EXCLUSIVELY to perform "Dasha Synastry" (checking timeline alignment).
-- Use `iva.md` to synthesize this into an empathetic psychological narrative.
+- Use bphs1.md for synastry, elemental balance, and checking the Karakas (Venus for romance, Jupiter for traditional stability).
+- Use bphs2.md EXCLUSIVELY to perform "Dasha Synastry" (checking if their current timelines align or clash).
+- Use iva.md to synthesize this into a modern, empathetic psychological narrative.
 </KNOWLEDGE_ROUTING>
 
 <ANALYTICAL_STEPS>
-1. **Ashta Koota & Dosha:** Use the pre-computed Koota score: {koota}. Manglik verdict: {manglik_canc}.
-2. **KP House Promise:** You MUST use the Python Engine's Synastry calculation below. Do not recalculate this.
-<PYTHON_SYNASTRY>
-{py_synastry}
-</PYTHON_SYNASTRY>
-3. **Parashari Synastry:** Consult the books to compare their Moon signs and Venus/Jupiter alignments.
+You MUST evaluate the match through these specific lenses, showing your reasoning internally before outputting the final sections:
+1. **Ashta Koota & Dosha (The Foundation):** Use the pre-computed Koota score: {koota}. Use the pre-computed Manglik verdict: {manglik_canc}. 
+2. **Parashari Synastry (The Connection):** Compare their 7th House lords. Compare their Moon signs for emotional compatibility. Evaluate the dignity of Venus and Jupiter in both charts.
+3. **KP House Promise (The Reality):** Evaluate BOTH individuals' "HOUSE STRENGTH SUMMARY" for H7 (Marriage), H8 (Longevity of bond/Mangalya), and H2 (Family expansion). If one has "STRONGLY PROMISED" and the other "NOT CLEARLY PROMISED", note this as a structural risk.
+4. **Dasha Synastry (The Timing):** Compare their currently active Mahadasha and Antardasha. Are their current life chapters psychologically compatible? (e.g., A Venus period aligns well with Rahu, but clashes heavily with a Ketu or Saturn isolation period).
 </ANALYTICAL_STEPS>
 
 <FORMAT>
-Output the final reading structured EXACTLY like this:
+Do NOT show your scratchpad math. Output the final reading structured EXACTLY like this:
+
 ### 1. The Cosmic Baseline
+*[2-3 sentences explaining the practical reality of their Ashta Koota score and Manglik status]*
+
 ### 2. Emotional & Psychological Bond
-### 3. The Reality of the Promise (Cite the Python Synastry here)
+*[A paragraph analyzing their Moon signs, Lagna Lords, elemental balance, and Venus/Jupiter alignments]*
+
+### 3. The Reality of the Promise
+*[A paragraph comparing their respective KP House Strength Summaries for H7, H8, and H2. Do their structural promises align?]*
+
 ### 4. Timeline Alignment (Dasha Synastry)
+*[A critical paragraph analyzing if their current active planetary periods (Dashas) support a union right now, or if they are in clashing chapters of life]*
+
 ### 5. Final Verdict & Guidance
-- Green Flags: 
-- Red Flags: 
-- Compatibility Score: /10
+- **Green Flags:** [2-3 bullet points of strong, specific astrological connections]
+- **Red Flags / Challenges:** [2-3 bullet points of friction areas or structural risks]
+- **Compatibility Score:** [Give a definitive score out of 10 based on all 4 dimensions]
+- **Remedies:** [Only list if genuinely required based on Doshas or severely weak Karakas]
 </FORMAT>
 
-<person_1_chart>{dos_a}</person_1_chart>
-<person_2_chart>{dos_b}</person_2_chart>"""
+<person_1_chart>
+{dos_a}
+</person_1_chart>
 
-def build_comparison_prompt(profiles_dossiers, criteria):
-    python_rankings = calculate_and_rank_profiles(profiles_dossiers, criteria)
-    profile_sections = "\n\n".join(f"<profile_{i+1}_chart>\nName: {name}\n{dossier}\n</profile_{i+1}_chart>" for i,(name,dossier) in enumerate(profiles_dossiers))
-    
+<person_2_chart>
+{dos_b}
+</person_2_chart>"""
+
+def build_comparison_prompt(profiles_dossiers,criteria):
+    profile_sections="\n\n".join(f"<profile_{i+1}_chart>\nName: {name}\n{dossier}\n</profile_{i+1}_chart>" for i,(name,dossier) in enumerate(profiles_dossiers))
+    criteria_str="\n".join(f"  - {c}" for c in criteria)
     return f"""{GUARDRAILS}
-<mission>
-You are an elite Astrological Arbiter. I have already used precise Python algorithms to score and rank these individuals. 
-Your ONLY job is to read my strict Python rankings, open your astrological texts (`bphs1.md`, `kp3.md`), and write a natural, insightful sentence explaining *why* they received that placement based on their chart data. Do NOT recalculate or change the order.
-</mission>
 
-<PYTHON_CALCULATED_RANKINGS>
-{python_rankings}
-</PYTHON_CALCULATED_RANKINGS>
+<mission>
+You are an elite Astrological Arbiter. Compare the individuals strictly on these parameters:
+{criteria_str}
+
+<CONSISTENCY_RULES>
+Calculate scores internally using this strict hierarchy. DO NOT show your scratchpad math to the user.
+1. PRIMARY METRIC: Read the pre-computed "Base Score" (1, 2, or 3) from the HOUSE STRENGTH SUMMARY for the relevant house. 
+2. TIE-BREAKER 1 (+0.5 pts each): Count the total number of PRESENT Yogas relevant to the parameter.
+3. TIE-BREAKER 2 (+0.5 pts each): Look at the relevant Jaimini Karaka or Lagna Lord's dignity.
+4. PENALTIES (-1 pt each): Active Sade Sati, Graha Yuddha losers, or Combust/Debilitated planets without Neecha Bhanga.
+
+<MAX_ACCURACY_PARAMETER_MAPPING>
+- Wealth Potential -> Base Score: H2 and H11. Tie-breaker: Dhana Yogas.
+- Relationship Quality -> Base Score: H7. Tie-breaker: D9 Navamsa. Penalty: Active Manglik Dosha imbalance.
+- Career Success -> Base Score: H10. Tie-breaker: Amatyakaraka (AmK) dignity, Raja Yogas.
+- Life Struggles -> (Invert scoring: Higher struggles = Lower Rank). Base Score: H6 (Struggles) and H8 (Obstacles). Penalties: Sade Sati, Kemadruma Yoga.
+- Health & Longevity -> Base Score: H1 (Vitality) and H8 (Longevity). Penalty: Lagna lord in Dusthana (H6/H8/H12).
+- Happiness & Contentment -> Base Score: H4. Tie-breaker: Moon's Avastha and dignity.
+- Luck & Fortune -> Base Score: H9 (Luck/Dharma). Tie-breaker: Total Raja Yogas and Gajakesari Yogas.
+- Spiritual Depth -> Base Score: H12 (Spirituality). Tie-breaker: Atmakaraka (AK) dignity, Ketu prominently placed.
+- Hidden Pitfalls -> Rank based on the presence of Debilitated planets WITHOUT Neecha Bhanga or severe Kuja Dosha.
+</MAX_ACCURACY_PARAMETER_MAPPING>
 
 <FORMAT>
-For EACH parameter, list the individuals in the EXACT order I provided above.
-Append a 1-sentence explanation next to their name using data from their charts below.
+For EACH parameter requested, output EXACTLY like this:
 
-Finally, generate the 🏆 Definitive Rankings and 📊 Astrological Scorecard tables matching my Python data perfectly. Do NOT invent names.
+**[Parameter Name]**
+- **[Name 1] (Score: [Total Calculated Score]):** [One natural, insightful sentence explaining their specific astrological strengths/weaknesses for this trait].
+- **[Name 2] (Score: [Total Calculated Score]):** [One natural, insightful sentence explaining their specific astrological strengths/weaknesses for this trait].
+*(List all profiles)*
+
+At the very end of the response, generate TWO distinct Markdown tables in this EXACT order:
+
+### 🏆 Definitive Rankings
+Create a table showing the ordinal ranking (1st, 2nd, 3rd, 4th) for each person across every parameter. 
+*CRITICAL LOGIC RULE:* For "Life Struggles" and "Hidden Pitfalls", the scoring is inverted! The person with the HIGHEST numerical score has the most obstacles and MUST be ranked LAST. The person with the LOWEST score must be ranked 1st.
+
+### 📊 Astrological Scorecard
+Create a second table at the very bottom showing the exact numerical score each person received for each parameter. Add a final row calculating their "TOTAL OVERALL SCORE" (sum of all their positive points, minus their struggle/pitfall points).
 </FORMAT>
+</mission>
 
 {profile_sections}"""
 
-def build_prashna_prompt(question, dossier):
-    py_verdict, py_reason = get_prashna_python_verdict(question, dossier)
+def build_prashna_prompt(question,dossier):
     return f"""{GUARDRAILS}
+
 <mission>
-PRASHNA (Horary) reading.
+PRASHNA (Horary) reading — cast for this exact moment, for this question ONLY.
+
 QUESTION: "{question}"
 
-The Python Calculation Engine has already evaluated the chart and determined the exact answer.
-**PYTHON VERDICT:** {py_verdict}
-**PYTHON REASON:** {py_reason}
-
 <KNOWLEDGE_ROUTING>
-Open `kp6.md` and `bphs2.md`. Write the narrative explanation for this verdict based on the rules in the books. You are FORBIDDEN from contradicting the Python Verdict.
+- Use kp6.md STRICTLY for the mathematical Yes/No decision and ruling planets.
+- Use bphs2.md ONLY for the narrative explanation of the houses involved.
+- WARNING: DO NOT mix Parashari Horary timing rules with KP Horary rules. KP math overrides all.
 </KNOWLEDGE_ROUTING>
 
-MANDATORY FINAL LINE: "VERDICT: [{py_verdict}] — [one sentence summary]"
+PRASHNA RULES:
+1. Lagna and its lord = the querent.
+2. Relevant house by question:
+   Career/Job=H10 | Marriage=H7 | Money=H2,H11 | Health=H1,H6 | Children=H5
+   Property=H4 | Travel/Foreign=H9,H12 | Education=H4,H5 | Enemies/Legal=H6,H7
+3. PARASHARI: Strong relevant house lord → Favourable. Weak (debilitated, combust, dusthana) → Delay/denial.
+4. KP: Apply the HOUSE STRENGTH SUMMARY verdict for the relevant house.
+5. Moon's nakshatra provides timing context.
+6. MANDATORY FINAL LINE: "VERDICT: [Yes / No / Delayed] — [one sentence]"
 </mission>
 
 <prashna_chart_data>
 {dossier}
 </prashna_chart_data>"""
 
-def build_transit_prompt(dossier, gochara_overlay):
+def build_transit_prompt(dossier,gochara_overlay):
     return f"""{GUARDRAILS}
+
 <mission>
 GOCHARA (Live Transit) Analysis — how today's planetary positions activate the natal chart.
 
@@ -1805,6 +1474,16 @@ FULL NATAL DOSSIER:
 {dossier}
 </natal_and_transit_data>"""
 
+def build_raw_prompt(dossier):
+    return f"""<instructions>
+This is a complete, pre-computed Vedic birth chart. All values are mathematically locked.
+Do NOT recalculate any values. Ask me what you want to know about this chart.
+</instructions>
+
+<user_chart_data>
+{dossier}
+</user_chart_data>"""
+
 def build_tarot_prompt(question,cards,states,mode="General Guidance"):
     TAROT_MODES={"General Guidance":{"roles":["Situation / Past","Challenge / Present","Advice / Future"],
         "instruction":"General life overview — where they are, what blocks them, best path forward."},
@@ -1815,82 +1494,117 @@ def build_tarot_prompt(question,cards,states,mode="General Guidance"):
     cfg=TAROT_MODES.get(mode,TAROT_MODES["General Guidance"])
     roles=cfg["roles"]
     cards_str="\n".join(f"  {i+1}. {roles[i]}: {cards[i]} ({states[i]})" for i in range(len(cards)))
-    return f"""<mission>
-You are an expert, intuitive Tarot Reader. Python has cryptographically drawn the following spread:
+    return f"""<instructions>
+You are an expert, intuitive Tarot Reader.
+
+INTERPRETATION RULES:
+1. SYNERGY: Analyse card-to-card interplay, elemental dignities, and Major Arcana weight. Never read cards in isolation.
+2. REVERSED: If a card is Reversed, interpret its energy as blocked, internalised, or delayed.
+3. TONE: Confident but not fatalistic. Use "suggests", "points to", "leans toward".
+</instructions>
+
+<reading_context>
+Question: "{question}"
+Spread: {mode}
+Cards drawn (cryptographically randomised):
 {cards_str}
-Question: "{question}" | Spread: {mode} | Focus: {cfg['instruction']}
-</mission>
 
-<KNOWLEDGE_ROUTING>
-Open `tguide.md`. You MUST base your interpretation of these cards entirely on the archetypes, reversed meanings, and synergies defined in the guidebook. Do not invent meanings outside the text.
-If a card is Reversed, interpret its energy as blocked, internalised, or delayed.
-</KNOWLEDGE_ROUTING>
+Focus: {cfg['instruction']}
 
-<FORMAT>
+DELIVER (follow this format exactly):
 - Overall Summary (2-3 sentences)
 - Card-by-Card (each card's meaning in its specific spread position)
 - Combined Message (how the three interact)
 - Practical Action Step
 - One-Line Takeaway
-</FORMAT>"""
+</reading_context>"""
 
 def build_yesno_prompt(question,card,state):
-    return f"""<mission>
+    return f"""<instructions>
 You are an expert Tarot Reader — Yes/No Oracle mode.
-Question: "{question}" | Card drawn: {card} ({state})
-</mission>
-<KNOWLEDGE_ROUTING>
-Open `tguide.md` and read the core energy of this card. 
-Upright cards generally lean Yes; Reversed lean No — but factor in the archetype from the book.
-</KNOWLEDGE_ROUTING>
-<FORMAT>
+
+YES/NO RULES:
+- Upright cards generally lean Yes; Reversed lean No — but nuanced by card archetype.
+- Major Arcana carry more weight than Minor Arcana.
+- Court cards indicate people/situations — factor in narrative, not just polarity.
+- DO NOT give a vague "it depends" answer. Commit to a clear verdict.
+</instructions>
+
+<reading_context>
+Question: "{question}"
+Card: {card} ({state})
+
+DELIVER:
 1. Clear verdict: YES / LIKELY YES / UNCLEAR / LIKELY NO / NO
 2. Why — the card's specific energy in this context (2-3 sentences from the guide)
-3. Condition — what must happen (or be avoided)
+3. Condition — what must happen (or be avoided) for the outcome to manifest
 4. One-Line Takeaway
-</FORMAT>"""
+</reading_context>"""
 
 def build_celtic_cross_prompt(question,cards,states):
     cards_str="\n".join(f"  {CELTIC_CROSS_POSITIONS[i]}: {cards[i]} ({states[i]})" for i in range(10))
-    return f"""<mission>
+    return f"""<instructions>
 You are an expert Tarot Reader — Celtic Cross spread.
+
+CELTIC CROSS RULES:
+1. Cards 1 and 2 form the core tension — establish this first.
+2. Cards 3-6 provide context (foundation, past, potential, near future).
+3. Cards 7-10 form the Staff — internal journey, external influences, hopes/fears, outcome.
+4. Look for patterns: suits clustering, Major Arcana count, recurring numbers.
+5. Reversed cards = blocked or internalised energy of that position.
+6. Synthesise ALL 10 cards into one coherent narrative — do not read them as 10 isolated cards.
+</instructions>
+
+<reading_context>
 Question: "{question}"
-Ten-card spread:
+Ten-card Celtic Cross (cryptographically randomised):
 {cards_str}
-</mission>
-<KNOWLEDGE_ROUTING>
-Open `tguide.md`. You must synthesize these 10 cards strictly based on the meanings provided in the text. Look for patterns (suits clustering, Major Arcana count).
-</KNOWLEDGE_ROUTING>
-<FORMAT>
-- Core Message (Cards 1+2 tension)
-- Position-by-position reading
-- Patterns & Themes observed
-- Overall Narrative & Practical Guidance
+
+DELIVER (follow exactly):
+- Core Message (Cards 1+2 tension, 2-3 sentences)
+- Position-by-position reading (all 10 cards)
+- Patterns & Themes observed across the spread
+- Overall Narrative
+- Practical Guidance
 - Final One-Line Takeaway
-</FORMAT>"""
+</reading_context>"""
 
 def build_birth_card_prompt(card,dob):
-    return f"""<mission>
+    return f"""<instructions>
 You are an expert Tarot Reader — Tarot Birth Card reading.
-Date of Birth: {dob} | Tarot Birth Card: {card}
-</mission>
-<KNOWLEDGE_ROUTING>
-Open `tguide.md`. This is a PERMANENT card. Interpret it as a deep, lifelong energy from the book's definitions.
-</KNOWLEDGE_ROUTING>
-<FORMAT>
-1. Core symbolism of this card (from the guide)
-2. How this archetype manifests as a lifelong theme
-3. Core strengths & Core challenges
-4. Karmic lesson & Personal mantra
-</FORMAT>"""
+
+This is a PERMANENT card — it never changes and represents the person's soul archetype and life theme.
+Interpret it as a deep, lifelong energy — not a daily or situational reading.
+</instructions>
+
+<reading_context>
+Date of Birth: {dob}
+Tarot Birth Card: {card}
+
+DELIVER:
+1. The archetypal meaning and core symbolism of this card (from the guide)
+2. How this archetype manifests as a lifelong theme and purpose
+3. Core strengths this energy naturally brings
+4. Core challenges and shadow aspects to be aware of
+5. The soul's karmic lesson encoded in this card
+6. A personal mantra for living this archetype with full power
+</reading_context>"""
 
 def build_daily_tarot_prompt(card,state):
-    return f"""<mission>
-You are an expert Tarot Reader — Daily Guidance reading. Today's card: {card} ({state})
-</mission>
-<KNOWLEDGE_ROUTING>
-Open `tguide.md`. Extract the practical daily advice for this exact card and state.
-</KNOWLEDGE_ROUTING>"""
+    return f"""<instructions>
+You are an expert Tarot Reader — Daily Guidance reading.
+</instructions>
+
+<reading_context>
+Today's card: {card} ({state})
+
+Deliver a practical, insightful daily reading:
+- What this card means today
+- The energy available right now
+- Best action to take
+- What to be mindful of
+- One-Line Mantra for Today
+</reading_context>"""
 
 def build_numerology_prompt(name,dob_str,lp,dest,soul,pers,astro_dossier=None,user_q="",system="Western (Pythagorean)"):
     is_vedic=system=="Indian/Vedic (Chaldean)"
@@ -1903,19 +1617,12 @@ def build_numerology_prompt(name,dob_str,lp,dest,soul,pers,astro_dossier=None,us
             if s-y<=cur_age<e-y: return s,e,n,c
         return r4
     cp=which_p()
-    
-    instructions=f"""<mission>
+    instructions=f"""<instructions>
 You are a Master Numerologist — {sys_name} system.
 
-Python has already done the mathematical heavy lifting. All core numbers and cycles below are PRE-COMPUTED and LOCKED.
-Your job is to explain what these exact numbers mean for the user.
-</mission>
-
-<KNOWLEDGE_ROUTING>
-You must open and read the attached Numerology Markdown files (`wnum.md` for Pythagorean, or `inum1.md`/`inum2.md` for Chaldean). 
-Extract the definitions, challenges, and life themes for the specific numbers Python has calculated below. Do not use generic numerology knowledge; rely strictly on the books provided.
-</KNOWLEDGE_ROUTING>"""
-    
+CRITICAL: All core numbers below are PRE-COMPUTED and LOCKED.
+DO NOT recalculate them from the name or date. Use them exactly as given.
+</instructions>"""
     data=f"""<numerology_data>
 Subject: {name.upper()} | DOB: {dob_str} | System: {sys_name}
 
@@ -1966,7 +1673,8 @@ Deliver a complete report:
 {'7. Astro-Numerology Synthesis — Where both systems agree and diverge' if astro_dossier else ''}
 </mission>"""
     return f"{instructions}\n\n{data}\n\n{cross}\n\n{mission}"
-
+    
+    
 def build_dashboard_data_prompt(dossier, transits, user_name):
     return f"""<instructions>
 You are an elite Vedic astrologer. Analyze the natal chart against today's transits.
@@ -1989,20 +1697,26 @@ RESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN. NO EXTRA TEXT.
 {dossier}
 </data>"""
 
-def build_astro_decide_prompt(dossier, transits, question, py_verdict, py_advice):
-    # 1. PYTHON HAS ALREADY EXECUTED TARA BALA
+def build_astro_decide_prompt(dossier, transits, question):
     return f"""<instructions>
-You are an Astro-Decide engine. The mathematical engine has already made the decision based on Tara Bala transit alignments.
-Your job is to format this decision into JSON and provide ONE sentence linking the user's specific question to the provided advice.
-RESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN.
+You are an Astro-Decide engine. Analyze the transits against the natal chart to answer the user's question.
+RESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN. NO EXTRA TEXT.
 {{
-  "VERDICT": "{py_verdict}",
-  "WHY": "One sentence explaining why based on the transits below.",
-  "ALTERNATIVE": "{py_advice}"
+  "VERDICT": "YES / NO / WAIT / PROCEED CAUTIOUSLY",
+  "WHY": "One sentence astrological reason.",
+  "ALTERNATIVE": "One sentence advice on what to do instead or when to act."
 }}
 </instructions>
-<decision_query>{question}</decision_query>
-<data>{transits}</data>"""
+
+<decision_query>
+{question}
+</decision_query>
+
+<data>
+{transits}
+
+{dossier}
+</data>"""
 
 # ═══════════════════════════════════════════════════════════
 # CSS
@@ -2132,6 +1846,41 @@ div[data-testid="stButton"]>button:not([kind="primary"]):hover{background:rgba(2
 }
 </style>""", unsafe_allow_html=True)
 
+# ═══════════════════════════════════════════════════════════
+# COPY BUTTON (Clipboard API)
+# ═══════════════════════════════════════════════════════════
+def render_copy_button(text_to_copy, label="✨ Copy Prompt to Clipboard"):
+    b64=base64.b64encode(text_to_copy.encode("utf-8")).decode("utf-8")
+    uid=secrets.token_hex(4)
+    components.html(f"""
+<div style="width:100%;padding:0 2px;">
+<button id="cb_{uid}" onclick="doCopy_{uid}()" style="background:linear-gradient(135deg,rgba(144,98,222,0.85),rgba(205,140,80,0.85));border:1px solid rgba(255,255,255,0.2);color:white;padding:14px 20px;font-size:15px;cursor:pointer;border-radius:12px;font-weight:600;width:100%;box-shadow:0 4px 15px rgba(0,0,0,0.3);font-family:'Inter',sans-serif;transition:all .3s">{label}</button>
+</div>
+<script>
+async function doCopy_{uid}(){{
+  const btn=document.getElementById("cb_{uid}");
+  const text=decodeURIComponent(escape(atob('{b64}')));
+  try{{await navigator.clipboard.writeText(text);}}
+  catch(e){{const el=document.createElement('textarea');el.value=text;el.style.cssText='position:fixed;opacity:0';document.body.appendChild(el);el.select();document.execCommand('copy');document.body.removeChild(el);}}
+  btn.innerHTML="✅ Copied!";btn.style.background="linear-gradient(135deg,rgba(46,184,134,0.85),rgba(26,138,98,0.85))";
+  setTimeout(()=>{{btn.innerHTML="{label}";btn.style.background="linear-gradient(135deg,rgba(144,98,222,0.85),rgba(205,140,80,0.85))"}},3000);
+}}
+</script>""", height=56)
+
+def render_post_generation(prompt):
+    st.markdown("---")
+    st.markdown("""<div style='background:rgba(144,98,222,0.1);border:1px solid rgba(144,98,222,0.3);border-radius:12px;padding:1.2rem 1.5rem;margin-bottom:1rem;'>
+<h4 style='margin:0 0 .5rem;color:#fff;'>💡 How to use this</h4>
+<p style='color:#beb9cd;font-size:.9rem;margin:0;'>1. Click <b>Copy</b> below &nbsp;→&nbsp; 2. Open an AI &nbsp;→&nbsp; 3. <b>Paste & Send</b></p></div>""",
+                unsafe_allow_html=True)
+    render_copy_button(prompt)
+    st.markdown("<br>", unsafe_allow_html=True)
+    a1,a2,a3=st.columns(3)
+    a1.link_button("💬 ChatGPT","[https://chatgpt.com/](https://chatgpt.com/)",use_container_width=True)
+    a2.link_button("✨ Gemini","[https://gemini.google.com/](https://gemini.google.com/)",use_container_width=True)
+    a3.link_button("🚀 Grok","[https://grok.com/](https://grok.com/)",use_container_width=True)
+    with st.expander("📄 View Raw Prompt",expanded=False):
+        st.code(prompt,language="text")
 
 # ═══════════════════════════════════════════════════════════
 # BOTTOM NAV (mobile, functional via query params)
@@ -2144,6 +1893,7 @@ def render_bottom_nav():
                 
     more_items=[("🌟","Horoscopes","Horoscopes"),
                 ("🔢","Numerology","Numerology"),
+                ("✋","Palmistry","Palm Reading"), # <-- ADD THIS LINE
                 ("📖","Profiles","Saved Profiles")]
 
     # Outer container remains FIXED. Inner container is RELATIVE.
@@ -2360,6 +2110,7 @@ def render_sidebar():
                ("🃏 Mystic Tarot","Mystic Tarot"),
                ("🌟 Horoscopes","Horoscopes"),
                ("🔢 Numerology","Numerology"),
+               ("✋ Palmistry","Palm Reading"), # <-- ADD THIS LINE
                ("📖 Saved Profiles","Saved Profiles")]
         for label,page in pages:
             kind="primary" if st.session_state.nav_page==page else "secondary"
@@ -2498,7 +2249,7 @@ def show_dashboard():
         prof_time = datetime.strptime(prof['time'], "%H:%M").time()
 
         jd_natal, _, _ = local_to_julian_day(prof_date, prof_time, tz)
-        natal_moon, _ = get_planet_longitude_and_speed(jd_natal, PLANETS["Moon"])  # Sidereal Lahiri
+        natal_moon = swe.calc_ut(jd_natal, swe.MOON)[0][0]
 
         html = '<div style="display:flex; gap:8px; overflow-x:auto; padding-bottom:10px;">'
         todays_advice = ""
@@ -2508,7 +2259,7 @@ def show_dashboard():
             utc_d = d.astimezone(ZoneInfo("UTC"))
             jd = swe.julday(utc_d.year, utc_d.month, utc_d.day, 12.0)
             
-            moon, _ = swe.calc_ut(jd, swe.MOON, swe.FLG_SWIEPH|swe.FLG_SIDEREAL); moon = float(moon[0]) % 360
+            moon = swe.calc_ut(jd, swe.MOON)[0][0]
             tara = calculate_tara_bala(natal_moon, moon)
 
             is_today = (i == 0)
@@ -2585,26 +2336,20 @@ def show_dashboard():
                     try:
                         dos = generate_astrology_dossier(prof, False, compact=True)
                         transits = get_gochara_overlay(prof)
+                        prompt = build_astro_decide_prompt(dos, transits, q)
                         
-                        # --- THE PYTHON MATH LAYER ---
-                        jd_natal, _, _ = local_to_julian_day(date.fromisoformat(prof['date']), datetime.strptime(prof['time'], "%H:%M").time(), prof['tz'])
-                        natal_moon, _ = get_planet_longitude_and_speed(jd_natal, PLANETS["Moon"])  # Sidereal Lahiri
-                        dt_now = datetime.now(ZoneInfo("UTC"))
-                        jd_now = swe.julday(dt_now.year, dt_now.month, dt_now.day, dt_now.hour + dt_now.minute / 60.0)
-                        transit_moon, _ = get_planet_longitude_and_speed(jd_now, PLANETS["Moon"])  # Sidereal
-                        
-                        tara = calculate_tara_bala(natal_moon, transit_moon)
-                        py_verdict = "YES" if tara['status'] == "Go" else ("WAIT" if tara['status'] == "Stop" else "PROCEED CAUTIOUSLY")
-                        
-                        # --- THE AI FORMATTING LAYER ---
-                        prompt = build_astro_decide_prompt(dos, transits, q, py_verdict, tara['advice'])
                         res = generate_content_with_fallback(prompt)
+                        
                         st.session_state.astro_decide_result = safe_json(res, {
-                            "VERDICT": py_verdict, "WHY": "Cosmic signals processed.", "ALTERNATIVE": tara['advice']
+                            "VERDICT": "WAIT",
+                            "WHY": "Cosmic signals are unclear right now.",
+                            "ALTERNATIVE": "Delay action until tomorrow."
                         })
                     except Exception as e:
                         st.session_state.astro_decide_result = {
-                            "VERDICT": "RESTING", "WHY": "Free Models Exhausted.", "ALTERNATIVE": "Try again!"
+                            "VERDICT": "RESTING",
+                            "WHY": "The cosmic connection is busy right now (All Free Models Exhausted).",
+                            "ALTERNATIVE": "Give it a few minutes and try again!"
                         }
         
         if "astro_decide_result" in st.session_state:
@@ -2812,85 +2557,58 @@ def show_consultation_room():
             with st.spinner("Consulting books..."):
                 dos = generate_astrology_dossier(dp)
                 transits = get_gochara_overlay(dp)
+                books = get_knowledge_files(["bphs1.md", "bphs2.md", "kp3.md"])
+                
+                # 🛡️ RESTORED: THE HUMAN-CENTERED GUARDRAILS (WATERFALL & REDIRECTS)
+                guardrails = """
+                <CONSULTATION_GUARDRAILS>
+                You are a warm, highly empathetic, and professional Vedic Astrologer. Speak conversationally, directly to the user, and avoid sounding like a robot. 
+                
+                1. MISSING USER CONTEXT: If you need to know the user's current life situation (e.g., "Are you currently employed?", "Are you married?") to make a personalized prediction, ASK THEM conversationally. Do not assume their situation.
+                
+                2. INQUIRIES ABOUT OTHERS (DATA GATHERING): If the user asks about another person but provides ZERO data, do not guess. Reply warmly: "I'd love to look into this for you! To get the best insights, could you share whatever details you have for them? A full birth date, time, and place is perfect, but even just their full name or first name gives me something to work with!"
+                
+                3. INQUIRIES ABOUT OTHERS (THE WATERFALL): Whenever you have data about another person (either provided upfront or after you asked), apply this logic automatically:
+                   - FIRST NAME ONLY: Use Vedic Name Astrology (Swara Shastra / Nama Nakshatra based on the first phonetic sound). Include a warm disclaimer: "Since I only have a first name, I'm using Vedic Name Astrology to sense their energy. Take this with a pinch of salt, as true precision requires a full birth chart!"
+                   - FULL NAME ONLY: Use Chaldean/Pythagorean Numerology AND Vedic Name Astrology. Include a warm disclaimer: "Based on their full name, I'm tapping into Numerology to see their vibe. Keep in mind, true astrological accuracy requires a birth chart, so take this as a guiding light!"
+                   - FULL BIRTH DETAILS: Give a general astrological reading based on their placements. Add: "Since I can't run complex dual-chart math inside this chat window, here is a general reading based on their core placements!"
+                
+                4. MATCHMAKING / RISHTAS (STRICT INTENT): DO NOT assume a user wants matchmaking just because they mention another person. ONLY if the user explicitly asks for romantic compatibility, a 'rishta' check, or marriage matchmaking, reply warmly: "For a deep, mathematically precise compatibility check between your charts, please visit the 'Matchmaking / Compatibility' tab in the menu! I can give you a few quick thoughts here, but that tool is built exactly for this."
+                
+                5. FUTURE TRANSITS: You only have transit data for TODAY. For future predictions, strictly use their pre-computed 'VIMSHOTTARI DASHA' timeline. Explain it conversationally: "Looking at your planetary periods (Dashas)..."
+                
+                6. TAROT REDIRECT: If the user asks for a Tarot reading, adopt a cool, specialized persona: "My expertise lies in the stars, the planets, and astrological math—not the cards! For a mystic card reading, definitely check out the 'Mystic Tarot' tab in the menu."
+                
+                7. KNOWLEDGE ROUTING: If checking personality, use bphs1.md. If checking timing or Dashas, use bphs2.md. If checking KP Sub-Lords, use kp3.md. Synthesize everything using the modern tone of iva.md. Do not mix KP and Parashari timing rules.
+                </CONSULTATION_GUARDRAILS>
+                """
+                
+                # PARALLEL FETCHING OF FACTS PER MESSAGE
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    f_p = executor.submit(agent_worker, f"Extract identity facts for: {q}", books[0], "gemma-4-31b-it")
+                    f_t = executor.submit(agent_worker, f"Extract timing facts for: {q}", books[1], "gemma-4-31b-it")
+                    # SHIFTED TO GEMMA: Protects Gemini's 250k TPM limit by letting Gemma read the heavy kp3.md book
+                    f_k = executor.submit(agent_worker, f"Extract math facts for: {q}", books[2], "gemma-4-26b-a4b-it")
+                    notes = f"PARASHARI: {f_p.result()}\nTIMING: {f_t.result()}\nKP: {f_k.result()}\nLIVE TRANSITS TODAY: {transits}"
 
-                # SINGLE-CALL ARCHITECTURE (replaces 3-agent cascade)
-                # Why? 3 parallel agents + 1 synthesis = 4 API calls in ~5 seconds.
-                # Flash Lite has 250K TPM — that cascade blew past it every time.
-                # One call with the full dossier is MORE accurate (AI sees the complete picture)
-                # and uses 1 API call instead of 4.
-                guardrails = """<CONSULTATION_GUARDRAILS>
-You are a warm, highly empathetic Vedic Astrologer. Speak conversationally, directly to the user.
-
-RULES:
-1. MATH LOCK: Never invent or alter any number. Use only data from the dossier.
-2. MISSING CONTEXT: If you need the user's current life situation to answer well, ask them warmly.
-3. OTHERS (NO DATA): "I'd love to help! Could you share their birth details, full name, or at minimum a first name?"
-4. OTHERS (FIRST NAME ONLY): Use Vedic Name Astrology (Nama Nakshatra). Disclaimer: "I'm using name-based Vedic energy — a birth chart gives true precision."
-5. OTHERS (FULL NAME): Use Chaldean Numerology + Name Astrology. Disclaimer: "Name-based reading only — birth chart needed for full accuracy."
-6. OTHERS (FULL BIRTH DETAILS): General reading from their placements. Note: "For dual-chart math, use the Matchmaking tab."
-7. MATCHMAKING: Only redirect to Matchmaking tab if user EXPLICITLY asks for compatibility/rishta check.
-8. FUTURE TIMING: Use ONLY the Vimshottari Dasha timeline from the dossier. Never guess future transits.
-9. TAROT: Redirect to Mystic Tarot tab warmly.
-</CONSULTATION_GUARDRAILS>"""
-
-                # Build a single rich prompt: dossier + transits + question + history context
-                hist_text = ""
-                if st.session_state[memory_key]:
-                    last_few = st.session_state[memory_key][-4:]  # Last 2 exchanges for context
-                    hist_text = "\n\nRECENT CONVERSATION:\n" + "\n".join(
-                        f"{'User' if m['role']=='user' else 'Astrologer'}: {m['display']}"
-                        for m in last_few
-                    )
-
-                full_prompt = (
-                    f"{guardrails}\n\n"
-                    f"BIRTH CHART DOSSIER FOR {dp['name']}:\n{dos}\n\n"
-                    f"TODAY'S LIVE TRANSITS:\n{transits}"
-                    f"{hist_text}\n\n"
-                    f"USER QUESTION: {q}"
-                )
-
-                # One call — full dossier fits in Flash Lite's 1M context.
-                # htrh1.md = B.V. Raman's practical house reading guide (Houses 1-6).
-                # At 119K tokens it fits safely alongside dossier (~20K) within 250K TPM.
-                # For questions about H7-H12 (marriage, career) the dossier already has KP verdicts.
-                try:
-                    consult_book = get_knowledge_files(["htrh1.md"])
-                    consult_content = consult_book + [full_prompt]
-                except Exception:
-                    consult_content = [full_prompt]  # Fallback: no book if GitHub fetch fails
-
+                # SYNTHESIS (History is kept slim, but your rules are enforced)
+                hist = [{"role": m["role"], "parts": [m["internal"]]} for m in st.session_state[memory_key]]
+                
+                # CRITICAL FIX: Explicitly command the AI NOT to dump raw notes!
+                combined_rules = guardrails + f"\n\nCRITICAL INSTRUCTION: Read the Agent Notes below to inform your accuracy, but DO NOT output them as raw lists, bullet points, or code blocks. Weave the information into a natural, warm, conversational response to the user.\n\nAGENT NOTES:\n{notes}"
+                
+                model = get_ai_model_by_name("gemini-3.1-flash-lite-preview", custom_system_rules=combined_rules)
+                chat = model.start_chat(history=hist)
+                response = chat.send_message(q, stream=True)
+                
                 full_txt = ""
-                success = False
-                for m_id in FREE_MODELS:
-                    if success: break
-                    for attempt in range(3):
-                        try:
-                            model = get_ai_model_by_name(m_id, custom_system_rules=guardrails)
-                            response = model.generate_content(consult_content, stream=True)
-                            for chunk in response:
-                                full_txt += chunk.text
-                                res_ph.markdown(full_txt + "▌")
-                            res_ph.markdown(full_txt)
-                            success = True
-                            break
-                        except Exception as e:
-                            err_str = str(e)
-                            is_rate = any(x in err_str for x in ["429", "quota", "RESOURCE_EXHAUSTED", "rate limit"])
-                            is_overflow = any(x in err_str for x in ["400", "InvalidArgument", "token count exceeds", "maximum number of tokens"])
-                            if is_overflow:
-                                break
-                            elif is_rate and attempt < 2:
-                                time_module.sleep((2 ** attempt) * 3)
-                            else:
-                                break
-
-                if not success:
-                    res_ph.warning("⏳ Models are briefly at capacity. Please try again in a moment.")
-                    return
-
-                st.session_state[memory_key].append({"role": "user",  "display": q,        "internal": q})
-                st.session_state[memory_key].append({"role": "model", "display": full_txt,  "internal": full_txt})
+                for chunk in response: 
+                    full_txt += chunk.text
+                    res_ph.markdown(full_txt + "▌")
+                res_ph.markdown(full_txt)
+                
+                st.session_state[memory_key].append({"role": "user", "display": q, "internal": q})
+                st.session_state[memory_key].append({"role": "model", "display": full_txt, "internal": full_txt})
 
 # ═══════════════════════════════════════════════════════════
 # ORACLE
@@ -3017,50 +2735,21 @@ def _run_oracle(mission):
             prof,d60=resolve_profile(item); profiles.append(prof); d60s.append(d60)
         if len(profiles)<req: return
         compact=mission=="Comparison (Multiple Profiles)" and len(profiles)>3
-
-        # Always reset history so a fresh reading is shown
-        st.session_state[f"oracle_{mission}_history"] = []
-        final = ""
-
+        
         with st.spinner("Consulting the ephemeris..."):
-
-            # ── DEEP PERSONAL ANALYSIS ──────────────────────────────
             if mission=="Deep Personal Analysis":
                 dossier = generate_astrology_dossier(profiles[0], d60s[0])
-
-                # STEP 1: Parallel agents read the dossier (no book files — dossier IS the data)
-                # Why no books? Agents extract Python-computed facts (degrees, dignities, dashas).
-                # The dossier already encodes what the books teach. Adding 100K-token books
-                # on top causes token overflow AND adds noise, not accuracy.
                 st.info("🧠 Firing Parallel AI Agents (Takes ~20s)...")
-                expert_rules = "<ROLE>Elite Vedic Astrologer</ROLE><MATH_LOCK>Never alter, invent or estimate any number. Use only data present in the dossier.</MATH_LOCK>"
+                agent_files = get_knowledge_files(["bphs1.md", "bphs2.md", "kp3.md"])
+                
                 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-                    f_p = executor.submit(agent_worker, build_agent_parashari_prompt(dossier), [], FREE_MODELS[0], expert_rules)
-                    f_t = executor.submit(agent_worker, build_agent_timing_prompt(dossier),    [], FREE_MODELS[0], expert_rules)
-                    f_k = executor.submit(agent_worker, build_agent_kp_prompt(dossier),        [], FREE_MODELS[1], expert_rules)
+                    f_p = executor.submit(agent_worker, build_agent_parashari_prompt(dossier), agent_files[0], "gemma-4-31b-it")
+                    f_t = executor.submit(agent_worker, build_agent_timing_prompt(dossier), agent_files[1], "gemma-4-31b-it")
+                    # SHIFTED TO GEMMA: Protects Gemini's 250k TPM limit
+                    f_k = executor.submit(agent_worker, build_agent_kp_prompt(dossier), agent_files[2], "gemma-4-26b-a4b-it")
                     p_notes, t_notes, k_notes = f_p.result(), f_t.result(), f_k.result()
-
+                    
                 final = build_master_synthesizer_prompt(dossier, p_notes, t_notes, k_notes)
-
-                # STEP 2: Synthesis with book knowledge.
-                # htrh1.md = B.V. Raman Vol 1 (Houses 1-6, personality, practical examples).
-                # 119K tokens — safely within Flash Lite's 250K TPM after 3 agent calls settle.
-                time_module.sleep(3)
-                st.info("📖 Writing your full reading...")
-                try:
-                    natal_book = get_knowledge_files(["htrh1.md"])
-                    result = generate_content_with_fallback(final, knowledge_files=natal_book)
-                except Exception as e:
-                    result = (f"⚠️ Reading generation paused ({str(e)[:100]}). "
-                              "Your chart data was computed successfully. Please try again in ~1 minute.")
-
-                # Pre-populate history → stream_ai_with_followup just renders, NO extra API call
-                st.session_state[f"oracle_{mission}_history"] = [
-                    {"role": "user",  "parts": [final]},
-                    {"role": "model", "parts": [result]},
-                ]
-
-            # ── MATCHMAKING ─────────────────────────────────────────
             elif mission=="Matchmaking / Compatibility":
                 ma=get_moon_lon_from_profile(profiles[0]); mb=get_moon_lon_from_profile(profiles[1])
                 koota=calculate_ashta_koota(ma,mb)
@@ -3073,72 +2762,36 @@ def _run_oracle(mission):
                 lagb=sign_index_from_lon(get_lagna_and_cusps(jdb,profiles[1]['lat'],profiles[1]['lon'])[0])
                 mb_d=check_manglik_dosha(lagb,sign_index_from_lon(plb["Moon"][0]),sign_index_from_lon(plb["Mars"][0]))
                 canc=get_manglik_cancellation_verdict(ma_d,mb_d)
-                final=build_matchmaking_prompt(
-                    generate_astrology_dossier(profiles[0],d60s[0]),
-                    generate_astrology_dossier(profiles[1],d60s[1]),
-                    koota, canc)
-
-                st.info("📖 Generating compatibility reading...")
-                try:
-                    # htrh2.md = B.V. Raman Vol 2 (Houses 7-12: marriage, relationships, partners).
-                    # Most targeted book for compatibility — entire Vol 2 is marriage/partnership focused.
-                    marriage_book = get_knowledge_files(["htrh2.md"])
-                    result = generate_content_with_fallback(final, knowledge_files=marriage_book)
-                except Exception as e:
-                    result = f"⚠️ Reading paused ({str(e)[:100]}). Please try again in ~1 minute."
-                st.session_state[f"oracle_{mission}_history"] = [
-                    {"role": "user",  "parts": [final]},
-                    {"role": "model", "parts": [result]},
-                ]
-
-            # ── COMPARISON ──────────────────────────────────────────
+                final=build_matchmaking_prompt(generate_astrology_dossier(profiles[0],d60s[0]),generate_astrology_dossier(profiles[1],d60s[1]),koota,canc)
             elif mission=="Comparison (Multiple Profiles)":
                 if not selected_criteria: st.warning("Select at least one criterion."); return
                 pairs=[(p['name'],generate_astrology_dossier(p,d,compact)) for p,d in zip(profiles,d60s)]
                 final=build_comparison_prompt(pairs,selected_criteria)
+                
+        # Save prompt to state so it persists outside the button press
+        st.session_state[f"oracle_prompt_{mission}"] = final
+        st.session_state[f"oracle_{mission}_history"] = [] # Clear memory for a fresh chat
 
-                st.info("📖 Comparing profiles...")
-                try:
-                    # htrh1.md = Raman Vol 1 — practical house strength and planetary dignity rules.
-                    # Comparison needs to know what makes a planet/house strong, which this book explains.
-                    compare_book = get_knowledge_files(["htrh1.md"])
-                    result = generate_content_with_fallback(final, knowledge_files=compare_book)
-                except Exception as e:
-                    result = f"⚠️ Reading paused ({str(e)[:100]}). Please try again in ~1 minute."
-                st.session_state[f"oracle_{mission}_history"] = [
-                    {"role": "user",  "parts": [final]},
-                    {"role": "model", "parts": [result]},
-                ]
-
-        # Store prompt for follow-up context (Prashna/Transit set their own prompts elsewhere)
-        if final:
-            st.session_state[f"oracle_prompt_{mission}"] = final
-
-    # ── RENDER: show result + follow-up chat box ─────────────────────
-    # • Deep Analysis / Matchmaking / Comparison: history is pre-populated above.
-    #   stream_ai_with_followup sees history already filled → just renders, zero extra API call.
-    # • Prashna / Transit: history is empty, stream_ai_with_followup makes ONE call (with books).
+    # If the prompt is saved in the state, fire up the AI!
+    # If the prompt is saved in the state, fire up the AI!
     if f"oracle_prompt_{mission}" in st.session_state:
+        # 🧠 DYNAMIC ROUTING: Precision File Mapping
         if mission == "Prashna Kundli":
-            # kp6.md = KP Horary Astrology exclusively — the ONLY book needed for Prashna.
-            # kp2.md (KP fundamentals) is useful background but kp6 covers all practical horary rules.
-            # Removing kp2 saves ~184K tokens → stays well under 250K TPM.
-            oracle_files = get_knowledge_files(["kp6.md"])
+            oracle_files = get_knowledge_files(["kp6.md", "kp2.md", "bphs2.md"])
         elif mission == "Gochara / Live Transit":
-            # iva.md = best single book for transit analysis — covers Ashtakavarga transits,
-            # nakshatra transits, divisional chart transits, and Tajaka. Modern and comprehensive.
-            # Removing bphs2.md saves ~335K tokens → prevents TPM overflow.
+            oracle_files = get_knowledge_files(["bphs2.md", "iva.md"])
+        elif mission == "Matchmaking / Compatibility":
+            oracle_files = get_knowledge_files(["bphs1.md", "bphs2.md", "iva.md"])
+        elif mission == "Comparison (Multiple Profiles)":
+            # 🛠️ STRICTNESS UPGRADE: Removed heavy books. The AI will now focus 100% of its attention on the strict prompt rules and the dossiers.
             oracle_files = get_knowledge_files(["iva.md"])
         else:
-            # History already has the answer — no files needed, just render + follow-up
-            oracle_files = None
+            # Deep Analysis: The heavy books were already read by the parallel agents.
+            # The Synthesizer only needs the 'iva.md' tone guide to write the final text.
+            oracle_files = get_knowledge_files(["iva.md"])
 
-        stream_ai_with_followup(
-            st.session_state[f"oracle_prompt_{mission}"],
-            f"oracle_{mission}_history",
-            "The Master Astrologer is writing...",
-            knowledge_files=oracle_files
-        )
+        # 🛠️ FIX: Outdented this line so it fires for ALL missions, not just the 'else' block!
+        stream_ai_with_followup(st.session_state[f"oracle_prompt_{mission}"], f"oracle_{mission}_history", "The Master Astrologer is writing...", knowledge_files=oracle_files, preferred_model="gemini-3.1-flash-lite-preview")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -3308,6 +2961,283 @@ def show_horoscopes():
                         st.write(generate_vedic_forecast(prof_json, "Monthly", today_str))
                     with pt3: 
                         st.write(generate_vedic_forecast(prof_json, "Yearly", today_str))
+
+# ═══════════════════════════════════════════════════════════
+# PALMISTRY ENGINE: THE KNOWLEDGE SNIPER
+# ═══════════════════════════════════════════════════════════
+@st.cache_data(show_spinner=False)
+def extract_knowledge_snippet(json_path, search_terms):
+    """Surgically extracts specific paragraphs from the massive JSON file to save tokens."""
+    try:
+        # We assume the file is in your local directory for this function, 
+        # or we will download it temporarily in the main UI.
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return "Knowledge base file not found."
+
+    # Flatten the JSON into a single massive string of text
+    text_blocks = []
+    def extract_text(node):
+        if isinstance(node, dict):
+            if 'content' in node and isinstance(node['content'], str):
+                text_blocks.append(node['content'])
+            for v in node.values():
+                extract_text(v)
+        elif isinstance(node, list):
+            for item in node:
+                extract_text(item)
+                
+    extract_text(data)
+    full_text = " ".join(text_blocks)
+
+    # Snipe the relevant paragraphs
+    snippets = []
+    for term in search_terms:
+        if term == "None detected" or not term: continue
+        idx = full_text.find(term)
+        if idx != -1:
+            # Grab the 100 characters before and 800 after the keyword
+            start = max(0, idx - 100)
+            end = min(len(full_text), idx + 800)
+            snippets.append(f"--- BOOK EXCERPT ON '{term}' ---\n...{full_text[start:end]}...\n")
+
+    if snippets:
+        return "\n".join(snippets)
+    return "No classical texts found for these specific symbols."
+    
+    # --- MODULE A: The Sharpness Filter (OpenCV) ---
+@st.cache_data(show_spinner=False)
+def extract_sharpest_frame(video_bytes):
+    """
+    Reads a video buffer, calculates the Laplacian variance (sharpness), 
+    and returns the single sharpest frame as a PIL Image.
+    """
+    temp_video_path = "temp_palm_video.mp4"
+    with open(temp_video_path, "wb") as f:
+        f.write(video_bytes)
+
+    cap = cv2.VideoCapture(temp_video_path)
+    best_frame = None
+    max_sharpness = 0.0
+    frame_count = 0
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # Process every 5th frame to keep it lightning fast
+        if frame_count % 5 == 0:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+            
+            if sharpness > max_sharpness:
+                max_sharpness = sharpness
+                best_frame = frame.copy()
+        
+        frame_count += 1
+
+    cap.release()
+    if os.path.exists(temp_video_path):
+        os.remove(temp_video_path)
+
+    if best_frame is not None:
+        best_frame_rgb = cv2.cvtColor(best_frame, cv2.COLOR_BGR2RGB)
+        return PIL.Image.fromarray(best_frame_rgb)
+    return None
+
+# --- MODULE B & C: 3D Topography (MediaPipe) ---
+def analyze_hand_geometry(pil_image):
+    """
+    Uses MediaPipe to extract 3D depth (Z-axis), check Mount elevations,
+    and generate Sector Cropping boxes for the Vision AI.
+    """
+    mp_hands = mp.solutions.hands
+    hands = mp_hands.Hands(static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5)
+    
+    image_np = np.array(pil_image)
+    results = hands.process(image_np)
+    
+    geometry_data = {
+        "hand_type": "Unknown",
+        "mount_elevations": {},
+        "crop_sectors": {}
+    }
+    
+    if not results.multi_hand_landmarks:
+        return geometry_data
+        
+    landmarks = results.multi_hand_landmarks[0].landmark
+    h, w, _ = image_np.shape
+
+    # 1. Calculate Hand Proportions (Chirognomy)
+    wrist = landmarks[mp_hands.HandLandmark.WRIST]
+    middle_base = landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
+    middle_tip = landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+    
+    palm_length = np.sqrt((middle_base.x - wrist.x)**2 + (middle_base.y - wrist.y)**2)
+    finger_length = np.sqrt((middle_tip.x - middle_base.x)**2 + (middle_tip.y - middle_base.y)**2)
+    
+    if finger_length > palm_length * 0.9:
+         geometry_data["hand_type"] = "Air/Water (Vāta/Kapha dominant)"
+    else:
+         geometry_data["hand_type"] = "Fire/Earth (Pitta/Kapha dominant)"
+
+    # 2. Z-Axis Topography (Checking Mount Elevations)
+    # The lower the Z value, the closer the mount is to the camera (elevated)
+    center_z = landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_MCP].z 
+    jupiter_z = landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP].z
+    venus_z = landmarks[mp_hands.HandLandmark.THUMB_CMC].z
+    
+    if jupiter_z < center_z - 0.02:
+        geometry_data["mount_elevations"]["Mount of Jupiter"] = "Elevated"
+    if venus_z < center_z - 0.02:
+         geometry_data["mount_elevations"]["Mount of Venus"] = "Elevated"
+
+    # 3. Sector Cropping Bounding Boxes (For high-accuracy Vision scanning)
+    geometry_data["crop_sectors"]["Jupiter_Mount"] = (
+        int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP].x * w) - 100,
+        int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP].y * h) - 50,
+        int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP].x * w) + 100,
+        int(landmarks[mp_hands.HandLandmark.INDEX_FINGER_MCP].y * h) + 150
+    )
+    
+    hands.close()
+    return geometry_data
+    
+    # --- MODULE D: The Vision Scanner (Gemini Flash) ---
+@st.cache_data(show_spinner=False)
+def fetch_reference_grid(grid_filename):
+    """Fetches the reference grid image directly from your GitHub repo."""
+    # IMPORTANT: Change "book_image_92.jpg" below to the actual file number in your repo!
+    github_url = f"https://raw.githubusercontent.com/hinshalll/text2kprompt/main/palm_images/{grid_filename}"
+    try:
+        response = requests.get(github_url, timeout=10)
+        response.raise_for_status()
+        return PIL.Image.open(io.BytesIO(response.content))
+    except Exception as e:
+        return None
+
+def scan_mount_for_symbols(cropped_mount_pil, reference_grid_pil):
+    """Asks Vision AI to find symbols and score its own confidence."""
+    model = get_ai_model_by_name("gemini-2.5-flash") 
+    
+    prompt = """
+    Image 1 is a heavily cropped, high-res section of a user's palm. 
+    Image 2 is a reference grid of Auspicious Symbols (like Fish, Flag, Lotus).
+    Scan Image 1. Do you see any exact matches to the shapes in Image 2?
+    Do NOT guess. Output ONLY valid JSON with your findings and a confidence score out of 100.
+    Format: { "findings": [ {"symbol": "Fish", "confidence_score": 85} ] }
+    """
+    try:
+        resp = model.generate_content([cropped_mount_pil, reference_grid_pil, prompt])
+        return safe_json(resp.text, {"findings": []}).get("findings", [])
+    except Exception as e:
+        return []
+        
+        
+        # --- MODULE E: The Master UI & Arbiter ---
+def show_palmistry():
+    # Collapse sidebar on mobile
+    components.html("""<script>setTimeout(function(){var b=window.parent.document.querySelector('button[aria-label="Collapse sidebar"]');if(b&&window.parent.innerWidth<=768)b.click();},80);</script>""",height=0,width=0)
+    
+    st.markdown("<h1>✋ Advanced Palm Reading</h1>", unsafe_allow_html=True)
+    st.info("📸 **Smart Capture:** Upload a steady 3-second video of your palm with your phone's flash ON. (Or upload a highly detailed photo).")
+    
+    uploaded_file = st.file_uploader("Upload Video or Photo", type=["mp4", "mov", "jpg", "jpeg", "png"])
+    
+    if uploaded_file is not None:
+        st.markdown("---")
+        
+        # 1. RUN OPENCV SHARPNESS FILTER
+        with st.spinner("Step 1: Extracting highest-contrast frame..."):
+            if uploaded_file.name.lower().endswith(('mp4', 'mov')):
+                best_frame = extract_sharpest_frame(uploaded_file.getvalue())
+            else:
+                best_frame = PIL.Image.open(io.BytesIO(uploaded_file.getvalue())).convert("RGB")
+        
+        if not best_frame:
+            st.error("Failed to process media. Please try again.")
+            return
+
+        c1, c2 = st.columns([1, 1.5])
+        with c1:
+            st.image(best_frame, caption="Optimized Capture", use_container_width=True)
+            
+        # 2. RUN MEDIAPIPE GEOMETRY ENGINE
+        with c2:
+            with st.spinner("Step 2: Mapping 3D Topography & Elemental Geometry..."):
+                geo_data = analyze_hand_geometry(best_frame)
+                
+            st.success(f"🖐️ **Elemental Profile:** {geo_data['hand_type']}")
+            if geo_data['mount_elevations']:
+                for mount, status in geo_data['mount_elevations'].items():
+                    st.write(f"⛰️ **{mount}:** {status} (Z-Axis Verified)")
+            else:
+                st.write("⛰️ No heavily elevated mounts detected.")
+                
+            if st.button("Deep Scan & Generate Reading ✨", type="primary", use_container_width=True):
+                st.session_state.start_reading = True
+                
+                # 3. RUN SECTOR CROPPING, VISION, & ARBITER
+        if st.session_state.get("start_reading", False):
+            with st.spinner("Step 3: Sector Cropping & Vision Scanning..."):
+                # UPDATE THIS TO YOUR ACTUAL GITHUB IMAGE NUMBER!
+                ref_grid = fetch_reference_grid("book_image_92.jpg") 
+                verified_symbols = []
+                
+                if "Jupiter_Mount" in geo_data["crop_sectors"] and ref_grid:
+                    box = geo_data["crop_sectors"]["Jupiter_Mount"]
+                    box = (max(0, box[0]), max(0, box[1]), min(best_frame.width, box[2]), min(best_frame.height, box[3]))
+                    jupiter_crop = best_frame.crop(box)
+                    
+                    st.image(jupiter_crop, caption="Target Lock: Mount of Jupiter", width=150)
+                    
+                    findings = scan_mount_for_symbols(jupiter_crop, ref_grid)
+                    
+                    # The Bullshit Filter (Only accept >= 80% confidence)
+                    for f in findings:
+                        if f.get("confidence_score", 0) >= 80: 
+                            verified_symbols.append(f['symbol'])
+                            
+                if not verified_symbols:
+                    verified_symbols = ["None detected"]
+                    st.warning("👁️ Vision Scanner: No classical symbols detected with high confidence.")
+                else:
+                    st.success(f"👁️ Vision Scanner Verified: {', '.join(verified_symbols)}")
+
+            # 4. THE JSON SNIPER & RAG ARBITER
+            # Ensure palm_miner_output.json is in your GitHub repo in the aiguide folder!
+            json_path = "aiguide/palm_miner_output.json" 
+            sniper_text = extract_knowledge_snippet(json_path, verified_symbols)
+            
+            st.session_state.palm_prompt = f"""
+            <mission>
+            You are a Master Vedic Palmist.
+            </mission>
+            
+            <hard_data>
+            - Elemental Profile: {geo_data['hand_type']}
+            - 3D Elevated Mounts: {list(geo_data['mount_elevations'].keys())}
+            - Verified Micro-symbols: {', '.join(verified_symbols)}
+            </hard_data>
+            
+            <book_knowledge>
+            {sniper_text}
+            </book_knowledge>
+            
+            <instructions>
+            1. Read the extracted book knowledge above. 
+            2. Synthesize the raw data (elements, mounts, and symbols) into a brilliant, empathetic, and highly specific reading.
+            3. Do not mention that you read a JSON file or an excerpt. Just deliver the interpretation.
+            </instructions>
+            """
+            st.session_state.palm_chat = []
+            
+            # Note: We do NOT attach the 1M token file here. The Sniper already got what we need!
+            stream_ai_with_followup(st.session_state.palm_prompt, "palm_chat", "Step 4: The Arbiter is consulting the ancient texts...", knowledge_files=None, preferred_model="gemini-3.1-flash-lite-preview")
+
 
 # ═══════════════════════════════════════════════════════════
 # NUMEROLOGY
@@ -3594,6 +3524,7 @@ elif page=="The Oracle":     show_oracle()
 elif page=="Mystic Tarot":   show_tarot()
 elif page=="Horoscopes":     show_horoscopes()
 elif page=="Numerology":     show_numerology()
+elif page=="Palm Reading":   show_palmistry() # <-- ADD THIS LINE
 elif page=="Saved Profiles": show_vault()
 
 # ═══════════════════════════════════════════════════════════
