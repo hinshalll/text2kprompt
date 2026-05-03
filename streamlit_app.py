@@ -9,7 +9,6 @@ import google.generativeai as genai
 import streamlit.components.v1 as components
 import io
 import json
-import cv2
 import mediapipe as mp
 import numpy as np
 import imageio.v3 as iio
