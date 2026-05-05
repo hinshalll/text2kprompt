@@ -7,7 +7,7 @@ import os
 import requests
 import google.generativeai as genai
 import streamlit.components.v1 as components
-import swisseph as swe
+import swisseph as swe  # type: ignore[import-unresolved]
 from geopy.geocoders import Nominatim
 from timezonefinder import TimezoneFinder
 from streamlit_local_storage import LocalStorage
@@ -93,7 +93,7 @@ for suit in ["Wands","Cups","Swords","Pentacles"]:
 COMPARISON_CRITERIA = ["Wealth Potential — Who builds the most wealth?",
     "Relationship Quality — Who has the best marriage/love life?",
     "Career Success — Who reaches the highest professional position?",
-    "Life Struggles — Who faces the most karmic obstacles?",
+    "Karmic Intensity — Who faces the most karmic obstacles?",
     "Health & Longevity — Who has the strongest constitution?",
     "Happiness & Contentment — Who lives the most fulfilled life?",
     "Luck & Fortune — Who is the most naturally fortunate?",
@@ -342,13 +342,25 @@ FREE_MODELS = LIGHT_MODELS + HEAVY_MODELS
 
 @st.cache_data(show_spinner=False, ttl=timedelta(hours=24))
 def get_knowledge_files(file_names):
-    """Fetches MD files from GitHub as raw text strings (Faster, bypasses File API limits)."""
+    """Loads MD reference files locally first, then falls back to GitHub."""
     loaded_texts = []
     
     for name in file_names:
         try:
             # Strictly clean the URL to prevent 'No connection adapter' errors
             clean_name = name.strip(" '\n\r")
+            local_candidates = [
+                os.path.join(os.path.expanduser("~"), "Desktop", "aiguide", clean_name),
+                os.path.join(os.path.expanduser("~"), "Desktop", "aiguide", "Being Used", clean_name),
+            ]
+            for local_path in local_candidates:
+                if os.path.exists(local_path):
+                    with open(local_path, "r", encoding="utf-8", errors="ignore") as fh:
+                        text = fh.read()
+                    loaded_texts.append(f"\n--- START OF REFERENCE BOOK: {clean_name} ---\n{text}\n--- END OF REFERENCE BOOK: {clean_name} ---\n")
+                    break
+            if len(loaded_texts) and loaded_texts[-1].startswith(f"\n--- START OF REFERENCE BOOK: {clean_name} ---"):
+                continue
             github_url = f"https://raw.githubusercontent.com/hinshalll/text2kprompt/main/aiguide/{clean_name}"
             
             # Fetch the raw markdown text directly from GitHub
@@ -364,6 +376,39 @@ def get_knowledge_files(file_names):
             raise Exception(f"Network error loading {name}. Please check your connection and try again. Details: {e}")
             
     return loaded_texts
+
+@st.cache_data(show_spinner=False, ttl=timedelta(hours=24))
+def get_comparison_reference_digest():
+    """
+    Token-light reference pack for Compare Profiles.
+    Uses a compact digest from BPHS1 + KP3 instead of attaching multi-MB books.
+    """
+    return ["""
+--- START OF REFERENCE DIGEST: BPHS1.md + KP3.md for Compare Profiles ---
+Use this digest as the book authority for comparison output.
+
+PARASHARI / BPHS1 PRINCIPLES
+- Judge a topic from the relevant house, its lord, occupants, aspects/associations, natural karaka, dignity, yogas, and appropriate varga.
+- House meanings used here: H1 body/vitality/self; H2 wealth/family/speech; H3 courage/effort; H4 peace of mind/home/happiness/property; H5 intelligence/children/fame/purva punya; H6 disease/debts/enemies/competition; H7 spouse/marriage/partnership; H8 longevity/sudden reversals/hidden matters; H9 fortune/dharma/guru; H10 profession/status/honour; H11 gains/fulfilment; H12 losses/expenditure/moksha.
+- Divisional chart use: Hora for wealth; Navamsa for spouse and durable inner strength; Dashamsa for power, position and career; Dvadashamsa can support constitution/family inheritance; Vimsamsa is for worship/spiritual progress when available; Trimsamsa is for evils and hidden adversity.
+- Dignity matters: exaltation/own sign/vargottama strengthen; debility/enemy sign/combustion/planetary war/bad avastha weaken or spoil results unless cancelled by Neecha Bhanga or other protection.
+- Yogas matter only when the causing planets are strong enough. Kendra-trikona links, yogakarakas and Raja/Dhana/Lakshmi-type yogas support high promise; Kemadruma and severe malefic hemming raise burden.
+- Longevity and health use Lagna, Lagna lord, H3/H8, maraka pressure from H2/H7, Saturn, Sun, Moon, and afflictions. Do not turn this into medical diagnosis.
+- Spirituality uses H9/H12/H8/H5, Ketu, Jupiter, Saturn, Atmakaraka/Karakamsa ideas, and moksha-oriented varga support.
+
+KP3 PRINCIPLES
+- KP refines whether an event manifests. The star lord shows the main house results; the sub-lord selects/denies the specific outcome.
+- A cusp sub-lord that signifies the event houses promises the event; if it signifies opposing houses, it delays, obstructs or denies.
+- Marriage/engagement: houses 2, 7 and 11 are primary; 3 and 9 can support agreement/consent.
+- Finance: H2 is bank position/self-acquisition; H11 is profit/net gain; H12 is loss/expense. For service-linked money include H10.
+- Profession/status: H10 is position, fame, reputation and profession; H11 is fulfilment/realisation; H6 supports service, competition and victory over opponents.
+- Partnership/business: H7 with H2/H10/H11 supports success; H8/H12 links weaken.
+- Disease judgment uses the 6th cusp sub-lord and its star/sub links; chronicity and danger require H8/H12 context.
+
+COMPARISON OUTPUT RULE
+- Python scores are final. Explain rankings with chart evidence and this digest. Do not recalculate, invent positions, or use current transits/Sade Sati/current dasha to alter lifetime baseline scores.
+--- END OF REFERENCE DIGEST ---
+"""]
 
 def get_ai_model_by_name(model_name, custom_system_rules=None):
     """Directly calls a specific model with dynamic system rules, preserving original guardrails."""
@@ -1094,6 +1139,87 @@ def detect_yogas(ls,moon_sidx,planet_data,r_lon,k_lon):
             yogas.append(("Kemadruma Yoga (Negative)",f"No planets flanking Moon in H{h2m}/H{h12m}, Moon not in Kendra — emotional isolation tendency"))
         elif not flanking and moon_in_kendra:
             absent.append(f"Kemadruma Yoga CANCELLED — Moon in Kendra H{mh2} (classical cancellation)")
+
+    # ── LAKSHMI YOGA (BPHS) ──
+    # H9 lord in kendra/trikona AND Venus in own/exalted in kendra/trikona
+    h9_lord = SIGN_LORDS_MAP[(ls+8)%12]; h9_lord_h = ho(h9_lord)
+    ven_sidx = si("Venus"); ven_h = ho("Venus")
+    ven_strong = ven_sidx is not None and (ven_sidx == DIGNITIES["Venus"][0] or ("Venus" in OWN_SIGNS and ven_sidx in OWN_SIGNS["Venus"]))
+    if h9_lord_h in {1,4,5,7,9,10} and ven_h in {1,4,5,7,9,10} and ven_strong:
+        yogas.append(("Lakshmi Yoga", f"H9 lord ({h9_lord}) in H{h9_lord_h} + Venus strong in H{ven_h} — wealth, fortune, prosperity"))
+    else: absent.append("Lakshmi Yoga — conditions not met")
+
+    # ── SARASWATI YOGA (BPHS) ──
+    # Jupiter, Venus, Mercury all in kendras, trikonas, or H2
+    svs = {1,2,4,5,7,9,10}
+    jh_s=ho("Jupiter"); vh_s=ho("Venus"); mh_s=ho("Mercury")
+    if jh_s in svs and vh_s in svs and mh_s in svs:
+        yogas.append(("Saraswati Yoga", f"Jupiter(H{jh_s})+Venus(H{vh_s})+Mercury(H{mh_s}) in favorable houses — learning, wisdom, eloquence"))
+    else: absent.append("Saraswati Yoga — Jupiter/Venus/Mercury not all in favorable houses")
+
+    # ── DHANA YOGA (2nd-11th lord connection) ──
+    h2_lord = SIGN_LORDS_MAP[(ls+1)%12]; h11_lord = SIGN_LORDS_MAP[(ls+10)%12]
+    h2_lord_h = ho(h2_lord); h11_lord_h = ho(h11_lord)
+    if h2_lord == h11_lord:
+        yogas.append(("Dhana Yoga", f"{h2_lord} lords both H2 and H11 — natural wealth axis connection"))
+    elif h2_lord_h and h11_lord_h:
+        if h2_lord_h == h11_lord_h:
+            yogas.append(("Dhana Yoga", f"H2 lord ({h2_lord}) + H11 lord ({h11_lord}) conjunct in H{h2_lord_h} — strong wealth accumulation"))
+        elif ((h11_lord_h - h2_lord_h) % 12) in {0,3,6,9}:
+            yogas.append(("Dhana Yoga", f"H2 lord ({h2_lord}, H{h2_lord_h}) + H11 lord ({h11_lord}, H{h11_lord_h}) in mutual kendra — wealth accumulation"))
+        else: absent.append(f"Dhana Yoga — H2 lord ({h2_lord}) and H11 lord ({h11_lord}) not connected")
+
+    # ── AMALA YOGA (BPHS) ──
+    # Only natural benefics in H10 from Lagna
+    h10_occ = [pn for pn in list(planet_data.keys())+["Rahu","Ketu"] if ho(pn)==10]
+    if h10_occ and all(p in {"Jupiter","Venus","Mercury","Moon"} for p in h10_occ):
+        yogas.append(("Amala Yoga", f"Only benefics ({', '.join(h10_occ)}) in H10 — spotless reputation, ethical career"))
+    else: absent.append("Amala Yoga — H10 empty or contains malefics")
+
+    # ── SUNAPHA / ANAPHA / DURUDHURA YOGA (Moon flanking) ──
+    if mh2:
+        m_h2 = ((mh2-1+1)%12)+1; m_h12 = ((mh2-1-1)%12)+1
+        sun_excluded = {"Sun","Rahu","Ketu"}
+        sunapha_p = [pn for pn in planet_data if pn not in sun_excluded and ho(pn)==m_h2]
+        anapha_p = [pn for pn in planet_data if pn not in sun_excluded and ho(pn)==m_h12]
+        if sunapha_p and anapha_p:
+            yogas.append(("Durudhura Yoga", f"Planets in H2({', '.join(sunapha_p)}) and H12({', '.join(anapha_p)}) from Moon — wealth, fame, generosity"))
+        elif sunapha_p:
+            yogas.append(("Sunapha Yoga", f"{', '.join(sunapha_p)} in H2 from Moon — self-made wealth, resourcefulness"))
+        elif anapha_p:
+            yogas.append(("Anapha Yoga", f"{', '.join(anapha_p)} in H12 from Moon — spiritual depth, generosity"))
+
+    # ── VESHI / VOSHI / UBHAYACHARI YOGA (Sun flanking) ──
+    sun_h = ho("Sun")
+    if sun_h:
+        s_h2 = ((sun_h-1+1)%12)+1; s_h12 = ((sun_h-1-1)%12)+1
+        node_moon = {"Moon","Rahu","Ketu"}
+        veshi_p = [pn for pn in planet_data if pn not in node_moon and pn!="Sun" and ho(pn)==s_h2]
+        voshi_p = [pn for pn in planet_data if pn not in node_moon and pn!="Sun" and ho(pn)==s_h12]
+        if veshi_p and voshi_p:
+            yogas.append(("Ubhayachari Yoga", f"Planets flanking Sun: H2({', '.join(veshi_p)})+H12({', '.join(voshi_p)}) — regal bearing, authority"))
+        elif veshi_p:
+            yogas.append(("Veshi Yoga", f"{', '.join(veshi_p)} in H2 from Sun — status, truthfulness"))
+        elif voshi_p:
+            yogas.append(("Voshi Yoga", f"{', '.join(voshi_p)} in H12 from Sun — learned, charitable"))
+
+    # ── SHUBHA KARTARI YOGA ON LAGNA ──
+    # Natural benefics flanking H1 (in H2 and H12)
+    nb = {"Jupiter","Venus","Mercury","Moon"}
+    h2_all = [pn for pn in list(planet_data.keys())+["Rahu","Ketu"] if ho(pn)==2]
+    h12_all = [pn for pn in list(planet_data.keys())+["Rahu","Ketu"] if ho(pn)==12]
+    if any(p in nb for p in h2_all) and any(p in nb for p in h12_all):
+        yogas.append(("Shubha Kartari Yoga", "Natural benefics flank Lagna — protection, good fortune, auspicious life"))
+    else: absent.append("Shubha Kartari Yoga — benefics do not flank Lagna")
+
+    # ── NEECHA BHANGA RAJA YOGA (add to yoga list when detected) ──
+    for pname_nb in ["Sun","Moon","Mars","Mercury","Jupiter","Venus","Saturn"]:
+        p_nb_sidx = si(pname_nb)
+        if p_nb_sidx is not None and pname_nb in DIGNITIES and p_nb_sidx == DIGNITIES[pname_nb][1]:
+            conds_nb = check_neecha_bhanga(pname_nb, ls, moon_sidx, planet_data, r_lon, k_lon)
+            if conds_nb:
+                yogas.append(("Neecha Bhanga Raja Yoga", f"{pname_nb} debilitated but cancelled — rise through adversity, hidden power"))
+
     return yogas,absent
 def calculate_sade_sati(natal_moon_sidx):
     utc=datetime.now(ZoneInfo("UTC"))
@@ -1116,45 +1242,145 @@ def get_manglik_cancellation_verdict(ma,mb):
     elif not m1 and not m2: return "No Manglik Dosha in either chart."
     who="Person 1 is Manglik" if m1 else "Person 2 is Manglik"
     return f"MANGLIK IMBALANCE — {who}, the other is not. Carefully chosen Muhurta and remedies advisable."
-def calculate_ashta_koota(ma,mb):
-    s1=sign_index_from_lon(ma); s2=sign_index_from_lon(mb)
-    n1=min(int((ma%360)//(360/27)),26); n2=min(int((mb%360)//(360/27)),26)
-    vm=[1,2,3,0,1,2,3,0,1,2,3,0]; v=1 if vm[s1]<=vm[s2] else 0
-    va=[0,0,1,2,3,1,1,4,0,2,1,2]; va1,va2=va[s1],va[s2]
-    if va1==va2: vap=2
-    elif {va1,va2} in [{1,3},{1,4},{2,3}]: vap=0
-    else: vap=1
-    t1=((n2-n1)%27)%9; t2=((n1-n2)%27)%9
-    ta=(0 if t1 in [2,4,6] else 1.5)+(0 if t2 in [2,4,6] else 1.5)
-    ym=[0,1,2,3,3,4,5,2,5,6,6,7,8,9,8,9,10,10,4,11,12,11,13,0,13,7,1]
-    y1,y2=ym[n1],ym[n2]; enemies=[{0,8},{1,13},{2,11},{3,12},{4,10},{5,6},{7,9}]
-    yo=4 if y1==y2 else (0 if {y1,y2} in enemies else 2)
-    lm=[0,1,2,3,4,2,1,0,5,6,6,5]; l1,l2=lm[s1],lm[s2]
-    f_map={0:[3,4,5],1:[2,6],2:[1,4],3:[2,4],4:[0,3,5],5:[0,3,4],6:[1,2]}
-    e_map={0:[2],1:[3,4],2:[3],3:[],4:[1,6],5:[1,2],6:[0,3,4]}
-    def rel(a,b): return 2 if b in f_map.get(a,[]) else (0 if b in e_map.get(a,[]) else 1)
-    ms={(2,2):5,(2,1):4,(1,2):4,(1,1):3,(2,0):1,(0,2):1,(1,0):.5,(0,1):.5,(0,0):0}
-    m=ms.get((rel(l1,l2),rel(l2,l1)),0)
-    gm={0:0,1:1,2:2,3:1,4:0,5:1,6:0,7:0,8:2,9:2,10:1,11:1,12:0,13:2,14:0,15:2,16:0,17:2,18:2,19:1,20:1,21:0,22:2,23:2,24:1,25:1,26:0}
-    g1,g2=gm[n1],gm[n2]
-    if g1==g2: g=6
-    elif g1==0 and g2==1: g=6
-    elif g1==1 and g2==0: g=5
-    elif g1==0 and g2==2: g=1
-    else: g=0
-    dist=(s2-s1)%12; bh=7 if dist in [0,2,3,6,8,9,10] else 0
-    nb=[0,1,2]*9; nd1,nd2=nb[n1],nb[n2]; nn=""; np=0
-    if nd1==nd2:
-        if n1==n2: nn="NADI DOSHA EXCEPTION: Same Nakshatra — Dosha CANCELLED."
-        elif SIGN_LORDS_MAP[s1]!=SIGN_LORDS_MAP[s2]: nn="NADI DOSHA PARTIAL EXCEPTION: Different Moon sign lords — severity reduced."
-    else: np=8
-    total=v+vap+ta+yo+m+g+bh+np
-    res=(f"TOTAL ASHTA KOOTA SCORE: {total}/36\n"
-         f"  Varna(1):{v} | Vashya(2):{vap} | Tara(3):{ta} | Yoni(4):{yo}\n"
-         f"  GrahaMaitri(5):{m} | Gana(6):{g} | Bhakoot(7):{bh} | Nadi(8):{np}")
-    if nn: res+=f"\n  NOTE: {nn}"
-    res+=f"\n  QUALITY: {'Excellent (31-36)' if total>=31 else 'Good (18-30)' if total>=18 else f'Challenging ({total}/36)'}"
-    return res
+
+def calculate_arudha_lagna(ls, planet_data, r_lon, k_lon):
+    ll_planet = SIGN_LORDS_MAP[ls]
+    ll_house = get_planet_house(ll_planet, ls, planet_data, r_lon, k_lon)
+    distance = ll_house - 1
+    al_house = ((ll_house - 1 + distance) % 12) + 1
+    if al_house == 1: al_house = 4
+    elif al_house == 7: al_house = 10
+    al_sidx = (ls + al_house - 1) % 12
+    return al_house, al_sidx
+
+def calculate_indu_lagna(ls, moon_sidx):
+    rays = {"Sun":30, "Moon":16, "Mars":6, "Mercury":8, "Jupiter":10, "Venus":12, "Saturn":1}
+    l9_lord = SIGN_LORDS_MAP[(ls + 8) % 12]
+    m9_lord = SIGN_LORDS_MAP[(moon_sidx + 8) % 12]
+    total_rays = rays.get(l9_lord, 0) + rays.get(m9_lord, 0)
+    rem = total_rays % 12
+    if rem == 0: rem = 12
+    indu_sidx = (moon_sidx + rem - 1) % 12
+    return indu_sidx
+
+def calculate_ashta_koota(moon_boy, moon_girl):
+    # Boy's and Girl's Moon Longitudes
+    s1 = sign_index_from_lon(moon_boy)
+    s2 = sign_index_from_lon(moon_girl)
+    n1 = min(int((moon_boy % 360) // (360 / 27)), 26)
+    n2 = min(int((moon_girl % 360) // (360 / 27)), 26)
+    
+    # 1. Varna (1 point)
+    vm = [1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0]
+    v = 1 if vm[s1] <= vm[s2] else 0
+    
+    # 2. Vashya (2 points)
+    va = [0, 0, 1, 2, 3, 1, 1, 4, 0, 2, 1, 2]
+    va1, va2 = va[s1], va[s2]
+    if va1 == va2: vap = 2
+    elif {va1, va2} in [{1, 3}, {1, 4}, {2, 3}]: vap = 0
+    else: vap = 1
+    
+    # 3. Tara (3 points) - Calculated from Girl to Boy and Boy to Girl
+    t1 = ((n2 - n1) % 27) % 9  # Boy to Girl
+    t2 = ((n1 - n2) % 27) % 9  # Girl to Boy
+    ta = (0 if t1 in [2, 4, 6] else 1.5) + (0 if t2 in [2, 4, 6] else 1.5)
+    
+    # 4. Yoni (4 points)
+    ym = [0, 1, 2, 3, 3, 4, 5, 2, 5, 6, 6, 7, 8, 9, 8, 9, 10, 10, 4, 11, 12, 11, 13, 0, 13, 7, 1]
+    y1, y2 = ym[n1], ym[n2]
+    enemies = [{0, 8}, {1, 13}, {2, 11}, {3, 12}, {4, 10}, {5, 6}, {7, 9}]
+    yo = 4 if y1 == y2 else (0 if {y1, y2} in enemies else 2)
+    
+    # 5. Graha Maitri (5 points)
+    lm = [0, 1, 2, 3, 4, 2, 1, 0, 5, 6, 6, 5]
+    l1, l2 = lm[s1], lm[s2]
+    f_map = {0: [3, 4, 5], 1: [2, 6], 2: [1, 4], 3: [2, 4], 4: [0, 3, 5], 5: [0, 3, 4], 6: [1, 2]}
+    e_map = {0: [2], 1: [3, 4], 2: [3], 3: [], 4: [1, 6], 5: [1, 2], 6: [0, 3, 4]}
+    def rel(a, b): return 2 if b in f_map.get(a, []) else (0 if b in e_map.get(a, []) else 1)
+    ms = {(2, 2): 5, (2, 1): 4, (1, 2): 4, (1, 1): 3, (2, 0): 1, (0, 2): 1, (1, 0): .5, (0, 1): .5, (0, 0): 0}
+    m = ms.get((rel(l1, l2), rel(l2, l1)), 0)
+    
+    # 6. Gana (6 points)
+    gm = [0, 1, 2, 1, 0, 1, 0, 0, 2, 2, 1, 1, 0, 2, 0, 2, 0, 2, 2, 1, 1, 0, 2, 2, 1, 1, 0]
+    g1, g2 = gm[n1], gm[n2]
+    if g1 == g2: g = 6
+    elif g1 == 0 and g2 == 1: g = 6
+    elif g1 == 1 and g2 == 0: g = 5
+    elif g1 == 0 and g2 == 2: g = 1
+    else: g = 0
+    
+    # 7. Bhakoot (7 points)
+    dist = (s2 - s1) % 12
+    bh = 7 if dist in [0, 2, 3, 6, 8, 9, 10] else 0
+    
+    # 8. Nadi (8 points)
+    nb = [0, 1, 2] * 9
+    nd1, nd2 = nb[n1], nb[n2]
+    nn = ""
+    np = 0
+    if nd1 == nd2:
+        if n1 == n2: nn = "NADI DOSHA EXCEPTION: Same Nakshatra (Dosha Cancelled)"
+        elif SIGN_LORDS_MAP[s1] != SIGN_LORDS_MAP[s2]: nn = "NADI DOSHA PARTIAL EXCEPTION: Different Rashi lords"
+    else: np = 8
+    
+    # Stree-Deergha & Mahendra check (Bonus/Mitigation)
+    dist_nak = (n2 - n1) % 27
+    mahendra = "Present" if dist_nak in [3, 6, 9, 12, 15, 18, 21, 24] else "Absent"
+    stree_deergha = "Excellent" if dist_nak >= 15 else "Poor"
+
+    total = v + vap + ta + yo + m + g + bh + np
+    return {
+        "score": total,
+        "varna": v, "vashya": vap, "tara": ta, "yoni": yo,
+        "maitri": m, "gana": g, "bhakoot": bh, "nadi": np,
+        "nadi_note": nn, "mahendra": mahendra, "stree_deergha": stree_deergha
+    }
+
+def calculate_marital_analysis(jd, lat, lon):
+    # Calculates D9 7th House, Upapada Lagna (UL) and Darapada (A7)
+    cusps = get_lagna_and_cusps(jd, lat, lon)
+    lagna_lon = cusps[0]
+    lagna_sign = sign_index_from_lon(lagna_lon)
+    
+    # Planets
+    p = {pn: get_planet_longitude_and_speed(jd, pid)[0] for pn, pid in PLANETS.items()}
+    
+    # Navamsha (D9)
+    d9_lagna_sign = int((lagna_lon % 360) / (360/108)) % 12
+    d9_7th_sign = (d9_lagna_sign + 6) % 12
+    d9_7th_lord = SIGN_LORDS_MAP[d9_7th_sign]
+    
+    # Upapada Lagna (UL) - Arudha of 12th House
+    h12_sign = (lagna_sign + 11) % 12
+    h12_lord = SIGN_LORDS_MAP[h12_sign]
+    if h12_lord == "Rahu" or h12_lord == "Ketu": h12_lord = "Saturn" # Proxy
+    lord_lon = p[h12_lord]
+    lord_sign = sign_index_from_lon(lord_lon)
+    dist = (lord_sign - h12_sign) % 12
+    ul_sign = (lord_sign + dist) % 12
+    # Exceptions
+    if ul_sign == h12_sign: ul_sign = (ul_sign + 9) % 12
+    elif ul_sign == (h12_sign + 6) % 12: ul_sign = (ul_sign + 9) % 12
+    
+    # Darapada (A7)
+    h7_sign = (lagna_sign + 6) % 12
+    h7_lord = SIGN_LORDS_MAP[h7_sign]
+    if h7_lord == "Rahu" or h7_lord == "Ketu": h7_lord = "Venus"
+    l7_sign = sign_index_from_lon(p[h7_lord])
+    d7 = (l7_sign - h7_sign) % 12
+    a7_sign = (l7_sign + d7) % 12
+    if a7_sign == h7_sign: a7_sign = (a7_sign + 9) % 12
+    elif a7_sign == (h7_sign + 6) % 12: a7_sign = (a7_sign + 9) % 12
+    
+    return {
+        "D9_7th_Sign": SIGNS[d9_7th_sign],
+        "D9_7th_Lord": d9_7th_lord,
+        "UL_Sign": SIGNS[ul_sign],
+        "A7_Sign": SIGNS[a7_sign],
+        "D1_7th_Sign": SIGNS[h7_sign]
+    }
+
 def get_kp_cusp_promise(house_num, ls, planet_data, r_lon, k_lon, placidus_cusps):
     """
     KP Core Event Promise Analysis per kp3.md.
@@ -1342,6 +1568,21 @@ def d10_si(lon):
     s=sign_index_from_lon(lon); slot=int((lon%360%30)//3)
     return ((s if s%2==0 else (s+8)%12)+slot)%12
 def d12_si(lon): return (sign_index_from_lon(lon)+int((lon%360%30)//2.5))%12
+def d30_si(lon):
+    # Parashari Trimsamsa: misfortune, hidden weakness, and durable affliction.
+    s = sign_index_from_lon(lon); d = lon % 30
+    if s % 2 == 0:  # odd signs
+        if d < 5: return 0      # Mars/Aries
+        if d < 10: return 10    # Saturn/Aquarius
+        if d < 18: return 8     # Jupiter/Sagittarius
+        if d < 25: return 2     # Mercury/Gemini
+        return 6                # Venus/Libra
+    else:           # even signs
+        if d < 5: return 1      # Venus/Taurus
+        if d < 12: return 5     # Mercury/Virgo
+        if d < 20: return 11    # Jupiter/Pisces
+        if d < 25: return 9     # Saturn/Capricorn
+        return 7                # Mars/Scorpio
 def d60_si(lon):
     # BPHS D60: each sign divided into 60 parts of 0.5° each.
     # The 60 parts cycle through all 12 signs 5 times (12×5=60).
@@ -1473,7 +1714,10 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
     lines.append(f"Coordinates: {lat_lbl}, {lon_lbl} | Timezone: {tz_name}")
     lines.append(f"Tithi: {panchanga['tithi']} | Yoga: {panchanga['yoga']} | Karana: {panchanga['karana']}")
     lines.append(f"\nLAGNA FOUNDATION:\nAscendant: {sign_name(ls)} {format_dms(lagna_lon%30)}")
+    al_house, al_sidx = calculate_arudha_lagna(ls, planet_data, r_lon, k_lon)
+    indu_sidx = calculate_indu_lagna(ls, moon_sidx)
     lines.append(f"Lagna Lord Chain: {ll_chain} | Manglik: {manglik}")
+    lines.append(f"Arudha Lagna (AL): {sign_name(al_sidx)} (H{al_house}) | Indu Lagna (Wealth): {sign_name(indu_sidx)}")
     lines.append(f"\nFUNCTIONAL PLANETS FOR {sign_name(ls).upper()} LAGNA (DO NOT override):")
     lines.append(f"  Yogakarakas: {', '.join(yogak) if yogak else 'None'}")
     lines.append(f"  Functional Benefics: {', '.join(f_ben) if f_ben else 'None'}")
@@ -1625,13 +1869,13 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
             pass
     lines.append(f"\nDIVISIONAL CHARTS:")
     all_pn=["Sun","Moon","Mars","Mercury","Jupiter","Venus","Saturn","Rahu","Ketu"]
-    d2,d3,d4,d7,d9,d10,d12,d60=[],[],[],[],[],[],[],[]
+    d2,d3,d4,d7,d9,d10,d12,d30,d60=[],[],[],[],[],[],[],[],[]
     for pn in all_pn:
         pl=get_planet_lon_helper(pn,planet_data,r_lon,k_lon)
         d2.append(f"{pn}:{sign_name(d2_si(pl))}"); d3.append(f"{pn}:{sign_name(d3_si(pl))}")
         d4.append(f"{pn}:{sign_name(d4_si(pl))}"); d7.append(f"{pn}:{sign_name(d7_si(pl))}")
         d9.append(f"{pn}:{sign_name(d9_si(pl))}"); d10.append(f"{pn}:{sign_name(d10_si(pl))}")
-        d12.append(f"{pn}:{sign_name(d12_si(pl))}")
+        d12.append(f"{pn}:{sign_name(d12_si(pl))}"); d30.append(f"{pn}:{sign_name(d30_si(pl))}")
         if include_d60: d60.append(f"{pn}:{sign_name(d60_si(pl))}")
     lines.append(f"  D9 Navamsa(Marriage): {', '.join(d9)}")
     lines.append(f"  D10 Dasamsa(Career):  {', '.join(d10)}")
@@ -1640,6 +1884,7 @@ def generate_astrology_dossier(profile,include_d60=False,compact=False):
     lines.append(f"  D4 Chaturt(Property): {', '.join(d4)}")
     lines.append(f"  D7 Saptam(Children):  {', '.join(d7)}")
     lines.append(f"  D12 Dwadam(Parents):  {', '.join(d12)}")
+    lines.append(f"  D30 Trimsamsa(Pitfalls): {', '.join(d30)}")
     if include_d60: lines.append(f"  D60 Shashtiamsa(Karma): {', '.join(d60)}")
     lines.append(f"\nVIMSHOTTARI DASHA:")
     lines.append(f"Birth Nakshatra: {dasha_info['birth_nakshatra']} | Balance: {dasha_info['balance_years']:.2f} yrs of {dasha_info['start_lord']}")
@@ -1699,76 +1944,931 @@ def extract_yogas(dossier_text):
         return yogas_section.count("✓")
     except: return 0
 
+def extract_kp_promise(dossier_text, house_number):
+    """Extract KP cusp promise verdict for a house from the dossier."""
+    pattern = rf"H{house_number} KP Promise[^|]+\| VERDICT: ([^\n]+)"
+    match = re.search(pattern, dossier_text)
+    if not match: return 0
+    v = match.group(1)
+    if "STRONGLY PROMISED" in v: return 3
+    if "PARTIALLY PROMISED" in v: return 2
+    if "DENIED" in v or "NOT PROMISED" in v: return 0
+    return 1
+
+def extract_planet_dignity(dossier_text, planet_name):
+    """Extract a planet's dignity status from the dossier."""
+    pattern = rf"{planet_name}.*?(Exalted|Own Sign|Moolatrikona|Debilitated|Combust|Vargottama|Neecha Bhanga)"
+    match = re.search(pattern, dossier_text, re.IGNORECASE)
+    if not match: return 0
+    d = match.group(1).lower()
+    if d in ("exalted", "moolatrikona"): return 3
+    if d in ("own sign", "vargottama"): return 2
+    if d == "neecha bhanga": return 1
+    if d in ("debilitated", "combust"): return -2
+    return 0
+
+def extract_yoga_presence(dossier_text, yoga_name):
+    """Check if a specific yoga is present."""
+    return 1 if (f"✓ {yoga_name}" in dossier_text or yoga_name in dossier_text.split("[Yogas — ABSENT")[0]) else 0
+
+def extract_ashtakavarga_score(dossier_text, house_number):
+    """Extract SAV bindu total for a specific house from the dossier."""
+    pattern = rf"SAV TOTAL:.*?H{house_number}:(\d+)"
+    match = re.search(pattern, dossier_text)
+    if match:
+        bindus = int(match.group(1))
+        # Normalize: 28+ = strong(3), 25-27 = average(2), <25 = weak(1)
+        if bindus >= 30: return 3
+        if bindus >= 25: return 2
+        return 1
+    return 2  # Default if not found
+
 def check_affliction(dossier_text, affliction_type):
     """Python flags penalties like Sade Sati."""
-    if affliction_type == "Sade Sati": return "Sade Sati: ACTIVE" in dossier_text
+    if affliction_type == "Sade Sati": return "Sade Sati: ACTIVE" in dossier_text or "ACTIVE (Phase" in dossier_text
     elif "Graha Yuddha" in affliction_type: return "WINS (higher ecliptic latitude)" in dossier_text
     return False
 
+def extract_planet_house(dossier_text, planet_name):
+    """Extract which house a planet occupies from the dossier."""
+    pattern = rf"{planet_name}.*?H(\d+)\)"
+    match = re.search(pattern, dossier_text[:3000])  # Only look in the planets section
+    return int(match.group(1)) if match else 0
+
+def score_planet_in_house(planet_house, good_houses, bad_houses):
+    """Score a planet based on whether it's in a good or bad house."""
+    if planet_house in good_houses: return 2
+    if planet_house in bad_houses: return -1
+    return 1
+
+_PLANET_RE = r"(Sun|Moon|Mars|Mercury|Jupiter|Venus|Saturn|Rahu|Ketu)"
+_CHART_FACTS_CACHE = {}
+
+_NATURAL_BENEFICS = {"Jupiter", "Venus", "Mercury", "Moon"}
+_NATURAL_MALEFICS = {"Sun", "Mars", "Saturn", "Rahu", "Ketu"}
+_DUSTHANAS = {6, 8, 12}
+_KENDRAS = {1, 4, 7, 10}
+_TRIKONAS = {1, 5, 9}
+_SIGN_INDEX = {name: i for i, name in enumerate(SIGNS)}
+
+def _clamp(value, low=0, high=100):
+    return max(low, min(high, value))
+
+def _score_positive(parts):
+    total = 0
+    weight = 0
+    for value, w in parts:
+        total += _clamp(value) * w
+        weight += w
+    return _clamp(total / weight if weight else 50)
+
+def _split_csv_ints(raw):
+    return {int(x) for x in re.findall(r"\d+", raw or "")}
+
+def _criterion_key(label):
+    text = str(label).strip()
+    known = [
+        "Wealth Potential", "Relationship Quality", "Career Success",
+        "Life Struggles", "Health & Longevity", "Happiness & Contentment",
+        "Luck & Fortune", "Spiritual Depth", "Hidden Pitfalls",
+    ]
+    for key in known:
+        if text.startswith(key):
+            return key
+    for sep in [" — ", " â€” ", " - ", " -- ", " – "]:
+        if sep in text:
+            return text.split(sep, 1)[0].strip()
+    return text
+
+def _section_between(text, start_marker, end_marker=None):
+    start = text.find(start_marker)
+    if start < 0: return ""
+    if end_marker is None:
+        return text[start:]
+    end = text.find(end_marker, start + len(start_marker))
+    return text[start:] if end < 0 else text[start:end]
+
+def _kp_score_from_verdict(verdict):
+    v = (verdict or "").upper()
+    if "STRONGLY PROMISED" in v: return 3
+    if "PARTIALLY PROMISED" in v: return 2
+    if "DENIED" in v or "NOT PROMISED" in v: return 0
+    return 1
+
+def _house_norm(base_score):
+    return {1: 38, 2: 62, 3: 84}.get(base_score, 50)
+
+def _sav_norm(bindus):
+    if bindus is None: return 50
+    return _clamp(50 + (bindus - 28) * 3.2, 25, 85)
+
+def _kp_norm(kp_score):
+    return {0: 25, 1: 50, 2: 68, 3: 86}.get(kp_score, 50)
+
+def _parse_varga_line(dossier_text, label):
+    match = re.search(rf"{label}[^:]*:\s*([^\n]+)", dossier_text)
+    if not match: return {}
+    out = {}
+    for part in match.group(1).split(","):
+        if ":" not in part: continue
+        planet, sign = [x.strip() for x in part.split(":", 1)]
+        sign = re.sub(r"[^A-Za-z ]", "", sign).strip()
+        if planet and sign: out[planet] = sign
+    return out
+
+def _extract_present_yogas(dossier_text):
+    present = {}
+    section = _section_between(dossier_text, "[Yogas", "[Jaimini")
+    for line in section.splitlines():
+        if "Yoga" not in line or "ABSENT" in line.upper(): continue
+        match = re.search(r"([A-Za-z][A-Za-z\-\s]+Yoga(?:\s*\(Negative\))?):\s*(.*)", line)
+        if match:
+            present[re.sub(r"\s+", " ", match.group(1)).strip()] = match.group(2).strip()
+    return present
+
+def _parse_chart_facts(dossier_text):
+    key = (len(dossier_text), hash(dossier_text))
+    if key in _CHART_FACTS_CACHE:
+        return _CHART_FACTS_CACHE[key]
+
+    facts = {
+        "houses": {},
+        "house_lords": {},
+        "planets": {},
+        "sav": {},
+        "kp": {},
+        "yogas": _extract_present_yogas(dossier_text),
+        "vargas": {
+            "D2": _parse_varga_line(dossier_text, "D2 Hora"),
+            "D9": _parse_varga_line(dossier_text, "D9 Navamsa"),
+            "D10": _parse_varga_line(dossier_text, "D10 Dasamsa"),
+            "D12": _parse_varga_line(dossier_text, "D12"),
+            "D30": _parse_varga_line(dossier_text, "D30"),
+        },
+        "karakas": {},
+        "neecha_bhanga": set(),
+        "weak_sav_houses": set(),
+        "strong_sav_houses": set(),
+        "manglik": "NOT MANGLIK",
+        "arudha_lagna": {"house": 0, "sign": ""},
+        "indu_lagna": {"sign": ""},
+    }
+
+    al_match = re.search(r"Arudha Lagna \(AL\):\s*([A-Za-z]+)\s*\(H(\d+)\)", dossier_text)
+    if al_match:
+        facts["arudha_lagna"] = {"sign": al_match.group(1), "house": int(al_match.group(2))}
+        
+    indu_match = re.search(r"Indu Lagna \(Wealth\):\s*([A-Za-z]+)", dossier_text)
+    if indu_match:
+        facts["indu_lagna"] = {"sign": indu_match.group(1)}
+
+    for h, theme, lord, lord_house, flags, kp_sl, base in re.findall(
+        r"H(\d{1,2}) \(([^)]+)\): Lord=([A-Za-z]+)\(H(\d{1,2})\) \[([^\]]*)\] \| KP SL=([A-Za-z]+): .*?Base Score: (\d)",
+        dossier_text
+    ):
+        hnum = int(h)
+        facts["houses"][hnum] = {"theme": theme, "base": int(base), "kp_sl": kp_sl, "flags": flags, "occupants": []}
+        facts["house_lords"][hnum] = {"planet": lord, "house": int(lord_house), "flags": flags}
+
+    for h, sign, lord, lord_house, occ in re.findall(
+        r"H(\d{2})\(([A-Za-z]+)\): Lord=([A-Za-z]+)\(H(\d{1,2})\) \| ([^\n]+)",
+        dossier_text
+    ):
+        hnum = int(h)
+        facts["house_lords"].setdefault(hnum, {"planet": lord, "house": int(lord_house), "flags": ""})
+        facts["houses"].setdefault(hnum, {"theme": sign, "base": extract_base_score(dossier_text, hnum), "kp_sl": "", "flags": "", "occupants": []})
+        facts["houses"][hnum]["occupants"] = [x.strip() for x in occ.split(",") if x.strip() and x.strip() != "Empty"]
+
+    planet_pat = re.compile(
+        rf"^\s*{_PLANET_RE}: H(\d{{1,2}})\s+([A-Za-z]+)\s+.*?(?:\[(.*?)\])?.*?(?:Avastha:([^|]+)\|)?\s*Nak:([^(]+)\(NL:([A-Za-z]+)\s+SL:([A-Za-z]+)",
+        re.MULTILINE
+    )
+    for match in planet_pat.finditer(dossier_text):
+        planet, house, sign, tags_raw, avastha, nak, nl, sl = match.groups()
+        tags = {t.strip() for t in (tags_raw or "").split(",") if t.strip()}
+        facts["planets"][planet] = {
+            "house": int(house),
+            "sign": sign,
+            "tags": tags,
+            "avastha": (avastha or "").strip(),
+            "nak": nak.strip(),
+            "nak_lord": nl,
+            "sub_lord": sl,
+            "kp_sigs": set(),
+            "war": "",
+        }
+
+    for planet, sig_text in re.findall(rf"{_PLANET_RE}.*?KP 4-Step:\s*([^\n]+)", dossier_text):
+        facts["planets"].setdefault(planet, {"house": 0, "tags": set(), "kp_sigs": set(), "war": ""})
+        facts["planets"][planet]["kp_sigs"] = _split_csv_ints(sig_text)
+
+    sav_match = re.search(r"SAV TOTAL:\s*([^\n]+)", dossier_text)
+    if sav_match:
+        for h, bindus in re.findall(r"H(\d{1,2}):(\d+)", sav_match.group(1)):
+            facts["sav"][int(h)] = int(bindus)
+    for h, bindus in re.findall(r"H(\d{1,2})\((\d+)\)", _section_between(dossier_text, "WEAK HOUSES")):
+        if int(bindus) <= 22: facts["weak_sav_houses"].add(int(h))
+    for h, bindus in re.findall(r"H(\d{1,2})\((\d+)\)", _section_between(dossier_text, "STRONG HOUSES")):
+        if int(bindus) >= 30: facts["strong_sav_houses"].add(int(h))
+
+    for h, sigs, matched, verdict in re.findall(
+        r"H(\d{1,2}) KP Promise.*?SL signifies houses:\s*\[([^\]]*)\].*?Matched:\s*\[([^\]]*)\].*?VERDICT:\s*([^\n]+)",
+        dossier_text
+    ):
+        hnum = int(h)
+        facts["kp"][hnum] = {
+            "sigs": _split_csv_ints(sigs),
+            "matched": _split_csv_ints(matched),
+            "verdict": verdict.strip(),
+            "score": _kp_score_from_verdict(verdict),
+        }
+
+    for kname, planet in re.findall(r"(Atmakaraka|Amatyakaraka|Darakaraka)[^:]*:\s*([A-Za-z]+)", dossier_text):
+        facts["karakas"][kname] = planet
+
+    for planet in re.findall(r"([A-Za-z]+)\s+.*?NEECHA BHANGA APPLIES", dossier_text):
+        if planet in PLANETS: facts["neecha_bhanga"].add(planet)
+
+    for winner, loser in re.findall(r"([A-Za-z]+) vs ([A-Za-z]+).*?WINS", dossier_text):
+        facts["planets"].setdefault(winner, {"house": 0, "tags": set(), "kp_sigs": set(), "war": ""})["war"] = "WINNER"
+        facts["planets"].setdefault(loser, {"house": 0, "tags": set(), "kp_sigs": set(), "war": ""})["war"] = "LOSER"
+
+    m = re.search(r"Manglik:\s*([^\n]+)", dossier_text)
+    if m: facts["manglik"] = m.group(1).strip()
+
+    _CHART_FACTS_CACHE[key] = facts
+    return facts
+
+def _planet_house(facts, planet):
+    return facts["planets"].get(planet, {}).get("house", 0)
+
+def _planet_strength(facts, planet):
+    if not planet: return 50
+    data = facts["planets"].get(planet, {})
+    tags = data.get("tags", set())
+    score = 52
+    if any(t == "Exalted" or t.startswith("Exalted") for t in tags): score += 24
+    if any("Own Sign" in t for t in tags): score += 16
+    if any("VARGOTTAMA" in t.upper() for t in tags): score += 10
+    if any("D9-Exalted" in t for t in tags): score += 9
+    if any("D9-Own Sign" in t for t in tags): score += 6
+    if any("D9-Debilitated" in t for t in tags): score -= 10
+    if any("Debilitated" in t for t in tags):
+        score -= 22
+        if planet in facts["neecha_bhanga"]: score += 24
+    if any("Combust" in t for t in tags): score -= 11
+    if any("GANDANTA" in t for t in tags): score -= 8
+    if any("PAPA-KARTARI" in t for t in tags): score -= 10
+    if data.get("war") == "LOSER": score -= 14
+    if data.get("avastha") in {"Adult", "Youth"}: score += 5
+    elif data.get("avastha") == "Old": score -= 4
+    elif data.get("avastha") == "Dead": score -= 13
+    
+    nak_lord = data.get("nak_lord")
+    if nak_lord and nak_lord in facts["planets"]:
+        nl_tags = facts["planets"][nak_lord].get("tags", set())
+        if any(t == "Exalted" or t.startswith("Exalted") for t in nl_tags): score += 6
+        if any("Own Sign" in t for t in nl_tags): score += 3
+        if any("Debilitated" in t for t in nl_tags): score -= 6
+
+    if planet in {"Rahu", "Ketu"}:
+        score = 50
+        if any("VARGOTTAMA" in t.upper() for t in tags): score += 8
+        if any("GANDANTA" in t for t in tags): score -= 10
+    return _clamp(score, 10, 95)
+
+def _varga_sign_strength(facts, chart, planet):
+    if not planet: return 50
+    sign = facts["vargas"].get(chart, {}).get(planet)
+    if not sign: return 50
+    sidx = _SIGN_INDEX.get(sign)
+    if sidx is None: return 50
+    score = 50
+    if planet in DIGNITIES:
+        if sidx == DIGNITIES[planet][0]: score += 24
+        elif sidx == DIGNITIES[planet][1]: score -= 24
+    if planet in OWN_SIGNS and sidx in OWN_SIGNS[planet]: score += 16
+    if planet in {"Rahu", "Ketu"} and sign in {"Gemini", "Virgo", "Sagittarius", "Pisces", "Scorpio"}:
+        score += 6
+    return _clamp(score, 20, 88)
+
+def _house_score(facts, house):
+    base = _house_norm(facts["houses"].get(house, {}).get("base", 1))
+    sav = _sav_norm(facts["sav"].get(house))
+    lord = facts["house_lords"].get(house, {}).get("planet")
+    lord_strength = _planet_strength(facts, lord) if lord else 50
+    lord_house = facts["house_lords"].get(house, {}).get("house")
+    placement_bonus = 0
+    if lord_house in _KENDRAS or lord_house in _TRIKONAS: placement_bonus += 5
+    if lord_house in _DUSTHANAS: placement_bonus -= 7
+    return _clamp(base * 0.45 + sav * 0.20 + lord_strength * 0.30 + 5 + placement_bonus, 15, 95)
+
+def _topic_yoga_score(facts, names, planet_data=None, ls=None, lagna_lon=None, jd_ut=None):
+    return sum(weight for name, weight in names.items() if name in facts["yogas"])
+
+def _topic_house_connection(facts, planets, houses):
+    houses = set(houses)
+    score = 0
+    for planet in planets:
+        if not planet: continue
+        pdata = facts["planets"].get(planet, {})
+        if pdata.get("house") in houses: score += 4
+        matched = pdata.get("kp_sigs", set()) & houses
+        score += min(6, len(matched) * 2)
+    return score
+
+def _affliction_count(facts, planets=None, houses=None):
+    planets = set(planets or facts["planets"].keys())
+    houses = set(houses or range(1, 13))
+    count = 0
+    for planet in planets:
+        if not planet: continue
+        pdata = facts["planets"].get(planet, {})
+        if pdata.get("house") not in houses: continue
+        tags = pdata.get("tags", set())
+        if any("Debilitated" in t for t in tags) and planet not in facts["neecha_bhanga"]: count += 1
+        if any("Combust" in t for t in tags): count += 1
+        if any("GANDANTA" in t for t in tags): count += 1
+        if any("PAPA-KARTARI" in t for t in tags): count += 1
+        if pdata.get("war") == "LOSER": count += 1
+        if pdata.get("avastha") == "Dead": count += 1
+    return count
+
+def _malefic_pressure(facts, houses):
+    houses = set(houses)
+    score = 0
+    for planet in _NATURAL_MALEFICS:
+        h = _planet_house(facts, planet)
+        if h in houses:
+            score += 6 if planet in {"Rahu", "Ketu", "Saturn", "Mars"} else 3
+    return score
+
+def _benefic_support(facts, houses):
+    houses = set(houses)
+    return sum(5 for planet in _NATURAL_BENEFICS if _planet_house(facts, planet) in houses)
+
+# Overrides for the legacy extractors above. Missing KP is now "unclear", not denial.
+def extract_kp_promise(dossier_text, house_number):
+    facts = _parse_chart_facts(dossier_text)
+    if house_number in facts["kp"]:
+        return facts["kp"][house_number]["score"]
+    pattern = rf"H{house_number} KP Promise[^|]+\| VERDICT: ([^\n]+)"
+    match = re.search(pattern, dossier_text)
+    return _kp_score_from_verdict(match.group(1)) if match else 1
+
+def extract_planet_dignity(dossier_text, planet_name):
+    strength = _planet_strength(_parse_chart_facts(dossier_text), planet_name)
+    if strength >= 78: return 3
+    if strength >= 65: return 2
+    if strength >= 54: return 1
+    if strength <= 35: return -2
+    return 0
+
+def extract_yoga_presence(dossier_text, yoga_name):
+    return 1 if yoga_name in _parse_chart_facts(dossier_text)["yogas"] else 0
+
+def extract_yogas(dossier_text):
+    return len(_parse_chart_facts(dossier_text)["yogas"])
+
+def extract_planet_house(dossier_text, planet_name):
+    return _planet_house(_parse_chart_facts(dossier_text), planet_name)
+
+def _recalc_math(dossier):
+    import re
+    from datetime import datetime
+    time_match = re.search(r"Time:\s*(.*?)\s*\(", dossier)
+    coord_match = re.search(r"Coordinates:\s*([0-9.]+)([NS]),\s*([0-9.]+)([EW])\s*\|\s*Timezone:\s*([^\s\n]+)", dossier)
+    if not time_match or not coord_match: return None
+    dt_str = time_match.group(1).strip()
+    try:
+        dt_local = datetime.strptime(dt_str, "%d %b %Y, %I:%M %p")
+    except: return None
+    lat_val, lat_dir, lon_val, lon_dir, tz_name = coord_match.groups()
+    lat = float(lat_val) if lat_dir == 'N' else -float(lat_val)
+    lon = float(lon_val) if lon_dir == 'E' else -float(lon_val)
+    
+    jd_ut, _, _ = local_to_julian_day(dt_local.date(), dt_local.time(), tz_name)
+    lagna_lon, _ = get_lagna_and_cusps(jd_ut, lat, lon)
+    ls = sign_index_from_lon(lagna_lon)
+    placidus_cusps = get_placidus_cusps(jd_ut, lat, lon)
+    planet_data = {pn: get_planet_longitude_and_speed(jd_ut, pid) for pn, pid in PLANETS.items()}
+    r_lon = get_rahu_longitude(jd_ut)
+    k_lon = (r_lon + 180.0) % 360
+    planet_data["Rahu"] = (r_lon, -0.05)
+    planet_data["Ketu"] = (k_lon, -0.05)
+    return ls, lagna_lon, planet_data, placidus_cusps, jd_ut, r_lon, k_lon
+
+
+def calculate_shadbala(pname, p_lon, p_spd, lagna_lon, ls, f, planet_data, jd_ut):
+    if pname in {"Rahu", "Ketu"}: return 5.0
+    sthana = 0
+    deep_exaltation = {"Sun": 10, "Moon": 33, "Mars": 298, "Mercury": 165, "Jupiter": 95, "Venus": 357, "Saturn": 200}
+    if pname in deep_exaltation:
+        neecha = (deep_exaltation[pname] + 180) % 360
+        dist = abs(p_lon - neecha)
+        dist = min(dist, 360 - dist)
+        sthana += dist / 3.0 
+    p_sign = int(p_lon // 30) % 12
+    varga_str = _planet_strength(f, pname) 
+    sthana += (varga_str / 95.0) * 112.5 
+    if p_sign % 2 == 0:
+        if pname in {"Sun", "Mars", "Jupiter", "Saturn", "Mercury"}: sthana += 15
+    else:
+        if pname in {"Venus", "Moon"}: sthana += 15
+    p_house = ((p_sign - ls) % 12) + 1
+    if p_house in {1, 4, 7, 10}: sthana += 60
+    elif p_house in {2, 5, 8, 11}: sthana += 30
+    else: sthana += 15
+    drekkana = int((p_lon % 30) // 10)
+    if drekkana == 0 and pname in {"Sun", "Mars", "Jupiter"}: sthana += 15
+    elif drekkana == 1 and pname in {"Mercury", "Saturn"}: sthana += 15
+    elif drekkana == 2 and pname in {"Moon", "Venus"}: sthana += 15
+    dig_peak_house = {"Jupiter": 1, "Mercury": 1, "Sun": 10, "Mars": 10, "Saturn": 7, "Moon": 4, "Venus": 4}
+    dig = 0
+    if pname in dig_peak_house:
+        peak_lon = ((ls + dig_peak_house[pname] - 1) * 30 + 15) % 360
+        dist = abs(p_lon - peak_lon)
+        dist = min(dist, 360 - dist)
+        dig = (180 - dist) / 3.0 
+    sun_lon = planet_data.get("Sun", (0,0))[0]
+    sun_dist = (sun_lon - lagna_lon) % 360
+    time_fraction = (sun_dist + 90) % 360 / 360.0
+    if pname in {"Moon", "Mars", "Saturn"}: nath = (1.0 - abs(time_fraction - 0.5) * 2) * 60
+    elif pname in {"Sun", "Jupiter", "Venus"}: nath = (abs(time_fraction - 0.5) * 2) * 60
+    else: nath = 60 
+    moon_lon = planet_data.get("Moon", (0,0))[0]
+    moon_sun_diff = (moon_lon - sun_lon) % 360
+    if pname in {"Moon", "Venus", "Jupiter", "Mercury"}:
+        paksha = moon_sun_diff / 3.0 if moon_sun_diff <= 180 else (360 - moon_sun_diff) / 3.0
+    else:
+        paksha = (180 - (moon_sun_diff if moon_sun_diff <= 180 else (360 - moon_sun_diff))) / 3.0
+    if pname == "Moon": paksha *= 2
+    kala = nath + paksha
+    chesta = 0
+    if p_spd < 0: chesta = 60 
+    elif pname in {"Sun", "Moon"}:
+        if pname == "Sun": chesta = 30
+        if pname == "Moon" and paksha > 30: chesta = 30
+    else: chesta = 15 
+    naisargika = {"Sun": 60, "Moon": 51.4, "Venus": 42.8, "Jupiter": 34.2, "Mercury": 25.7, "Mars": 17.1, "Saturn": 8.5}
+    nais = naisargika.get(pname, 0)
+    drig = 0
+    for op, (olon, ospd) in planet_data.items():
+        if op == pname or op in {"Rahu", "Ketu"}: continue
+        drishti = _calc_drishti(olon, p_lon, op)
+        if op in {"Jupiter", "Venus", "Mercury", "Moon"}: drig += drishti / 4.0
+        else: drig -= drishti / 4.0
+    return max(0.1, (sthana + dig + kala + chesta + nais + drig) / 60.0)
+
+def calculate_argala(house_idx, f):
+    argala_houses = [(house_idx + offset - 1) % 12 + 1 for offset in [2, 4, 5, 11]]
+    virodha_houses = [(house_idx + offset - 1) % 12 + 1 for offset in [3, 10, 12]]
+    net_argala = 0
+    for h in argala_houses:
+        occupants = f["houses"].get(h, {}).get("occupants", [])
+        for occ in occupants:
+            if occ in {"Jupiter", "Venus", "Moon", "Mercury"}: net_argala += 4
+            elif occ in {"Sun", "Mars", "Saturn", "Rahu", "Ketu"}: net_argala += 2
+    for h in virodha_houses:
+        occupants = f["houses"].get(h, {}).get("occupants", [])
+        for occ in occupants:
+            if occ in {"Jupiter", "Venus", "Moon", "Mercury"}: net_argala -= 3
+            elif occ in {"Sun", "Mars", "Saturn", "Rahu", "Ketu"}: net_argala -= 2
+    return net_argala
+
+def _yoga_strength_multiplier(yoga_name, facts, planet_data, ls, lagna_lon, jd_ut):
+    if yoga_name == "Gajakesari Yoga":
+        jup = _get_p_str("Jupiter", planet_data, ls, facts, lagna_lon, jd_ut)
+        moon = _get_p_str("Moon", planet_data, ls, facts, lagna_lon, jd_ut)
+        return ((jup + moon) / 2.0) / 75.0
+    elif yoga_name == "Hamsa Yoga":
+        return _get_p_str("Jupiter", planet_data, ls, facts, lagna_lon, jd_ut) / 75.0
+    elif yoga_name == "Malavya Yoga":
+        return _get_p_str("Venus", planet_data, ls, facts, lagna_lon, jd_ut) / 75.0
+    elif yoga_name in {"Ruchaka Yoga", "Chandra-Mangala Yoga"}:
+        return _get_p_str("Mars", planet_data, ls, facts, lagna_lon, jd_ut) / 75.0
+    elif yoga_name == "Bhadra Yoga":
+        return _get_p_str("Mercury", planet_data, ls, facts, lagna_lon, jd_ut) / 75.0
+    elif yoga_name == "Shasha Yoga":
+        return _get_p_str("Saturn", planet_data, ls, facts, lagna_lon, jd_ut) / 75.0
+    return 1.0
+
+
+def _calc_drishti(p1_lon, p2_lon, p1_name):
+    diff = (p2_lon - p1_lon) % 360
+    aspects = [180]
+    if p1_name == "Mars": aspects += [90, 210]
+    elif p1_name in {"Jupiter", "Rahu", "Ketu"}: aspects += [120, 240]
+    elif p1_name == "Saturn": aspects += [60, 270]
+    max_strength = 0
+    for asp in aspects:
+        orb = abs(diff - asp)
+        orb = min(orb, 360 - orb)
+        if orb <= 15:
+            strength = 100 - (orb * 6.66)
+            if strength > max_strength: max_strength = strength
+    return max_strength
+
+def _get_bhava_bala(house_idx, ls, planet_data, f, lagna_lon, jd_ut):
+    bindus = f["sav"].get(house_idx, 28)
+    base_score = _sav_norm(bindus) 
+    lord = f["house_lords"].get(house_idx, {}).get("planet")
+    lord_strength = _get_p_str(lord, planet_data, ls, f, lagna_lon, jd_ut) 
+    argala = calculate_argala(house_idx, f)
+    return max(0, min(100, base_score * 0.45 + lord_strength * 0.40 + argala * 1.5))
+
+def _get_kp_sub_lord_score(house_idx, placidus_cusps, planet_data, r_lon, k_lon, ls, required_houses, deny_houses):
+    cusp_lon = placidus_cusps[house_idx - 1]
+    sl = get_kp_sub_lord(cusp_lon)
+    sigs = get_planet_house_significations(sl, ls, {pn: (plon, 0) for pn, (plon, pspd) in planet_data.items() if pn not in ["Rahu","Ketu"]}, r_lon, k_lon)
+    score = 50
+    req_match = len(sigs & required_houses)
+    deny_match = len(sigs & deny_houses)
+    score += (req_match * 15)
+    score -= (deny_match * 15)
+    return max(0, min(100, score))
+
+def _get_p_str(p, planet_data, ls, f, lagna_lon, jd_ut):
+    if not p or p not in planet_data: return 50
+    plon, pspd = planet_data[p]
+    rupas = calculate_shadbala(p, plon, pspd, lagna_lon, ls, f, planet_data, jd_ut)
+    return _clamp(50 + (rupas - 6.0) * 12.5)
+
+def calculate_wealth_score(dossier):
+    f = _parse_chart_facts(dossier)
+    math_data = _recalc_math(dossier)
+    if not math_data: return 50.0
+    ls, lagna_lon, planet_data, placidus_cusps, jd_ut, r_lon, k_lon = math_data
+    
+    al_house = f.get("arudha_lagna", {}).get("house")
+    indu_sign = f.get("indu_lagna", {}).get("sign")
+    indu_bonus = 0
+    if indu_sign:
+        indu_occ_str = sum(5 for p in f["planets"] if f["planets"][p].get("sign") == indu_sign and p in _NATURAL_BENEFICS)
+        indu_occ_str -= sum(5 for p in f["planets"] if f["planets"][p].get("sign") == indu_sign and p in _NATURAL_MALEFICS)
+        if indu_occ_str > 0: indu_bonus = indu_occ_str + 10
+        elif indu_occ_str < 0: indu_bonus = indu_occ_str - 10
+        
+    al11_score = 0
+    if al_house:
+        al11_house = ((al_house + 10 - 1) % 12) + 1
+        al11_score = _get_bhava_bala(al11_house, ls, planet_data, f, lagna_lon, jd_ut)
+        
+    structural = _score_positive([(_get_bhava_bala(2, ls, planet_data, f, lagna_lon, jd_ut), 2.4), (_get_bhava_bala(11, ls, planet_data, f, lagna_lon, jd_ut), 2.4), (_get_bhava_bala(5, ls, planet_data, f, lagna_lon, jd_ut), 0.9), (_get_bhava_bala(9, ls, planet_data, f, lagna_lon, jd_ut), 0.9), (_get_bhava_bala(1, ls, planet_data, f, lagna_lon, jd_ut), 0.5), (al11_score, 1.2), (_sav_norm(f["sav"].get(2)), 1.2), (_sav_norm(f["sav"].get(11)), 1.2)])
+    karaka = _score_positive([(_get_p_str("Jupiter", planet_data, ls, f, lagna_lon, jd_ut), 1.5), (_get_p_str("Venus", planet_data, ls, f, lagna_lon, jd_ut), 1.0), (_get_p_str("Mercury", planet_data, ls, f, lagna_lon, jd_ut), 0.8), (_varga_sign_strength(f, "D2", "Jupiter"), 0.9), (_varga_sign_strength(f, "D2", "Venus"), 0.7), (_varga_sign_strength(f, "D9", "Jupiter"), 0.5)])
+    kp = _score_positive([(_get_kp_sub_lord_score(2, placidus_cusps, planet_data, r_lon, k_lon, ls, {2,11}, {6,8,12}), 1.4), (_get_kp_sub_lord_score(11, placidus_cusps, planet_data, r_lon, k_lon, ls, {2,11}, {6,8,12}), 1.0)])
+    yoga = _topic_yoga_score(f, {"Dhana Yoga": 7, "Lakshmi Yoga": 8, "Chandra-Mangala Yoga": 5, "Akhand Samrajya Yoga": 9, "Raja Yoga": 4, "Parivartana Yoga": 3, "Viparita Raja Yoga": 2}, planet_data, ls, lagna_lon, jd_ut)
+    placement = _topic_house_connection(f, ["Jupiter", "Venus", "Mercury", "Moon", "Mars"], {2, 5, 9, 11})
+    
+    h2_lon, h11_lon = ((ls + 1) * 30 + 15) % 360, ((ls + 10) * 30 + 15) % 360
+    malefic_drishti = sum((_calc_drishti(planet_data[m][0], h2_lon, m) + _calc_drishti(planet_data[m][0], h11_lon, m)) * 0.05 for m in ["Saturn", "Mars", "Rahu", "Ketu", "Sun"])
+    drains = _affliction_count(f, houses={2, 11}) * 3 + malefic_drishti
+    if _planet_house(f, "Rahu") in {2, 11} and _get_p_str("Jupiter", planet_data, ls, f, lagna_lon, jd_ut) < 55: drains += 5
+    return round(_clamp(structural * 0.40 + karaka * 0.22 + kp * 0.18 + yoga + placement + indu_bonus - drains), 2)
+
+def calculate_relationship_score(dossier):
+    f = _parse_chart_facts(dossier)
+    math_data = _recalc_math(dossier)
+    if not math_data: return 50.0
+    ls, lagna_lon, planet_data, placidus_cusps, jd_ut, r_lon, k_lon = math_data
+    dk = f["karakas"].get("Darakaraka")
+    
+    structural = _score_positive([(_get_bhava_bala(7, ls, planet_data, f, lagna_lon, jd_ut), 2.5), (_get_bhava_bala(2, ls, planet_data, f, lagna_lon, jd_ut), 1.2), (_get_bhava_bala(4, ls, planet_data, f, lagna_lon, jd_ut), 1.0), (_get_bhava_bala(5, ls, planet_data, f, lagna_lon, jd_ut), 0.9), (_get_bhava_bala(8, ls, planet_data, f, lagna_lon, jd_ut), 0.9), (_sav_norm(f["sav"].get(7)), 1.2)])
+    karaka = _score_positive([(_get_p_str("Venus", planet_data, ls, f, lagna_lon, jd_ut), 1.8), (_get_p_str("Jupiter", planet_data, ls, f, lagna_lon, jd_ut), 1.1), (_get_p_str("Moon", planet_data, ls, f, lagna_lon, jd_ut), 1.1), (_get_p_str(dk, planet_data, ls, f, lagna_lon, jd_ut), 1.0), (_varga_sign_strength(f, "D9", "Venus"), 1.2), (_varga_sign_strength(f, "D9", "Jupiter"), 0.8), (_varga_sign_strength(f, "D9", dk), 0.9)])
+    kp = _get_kp_sub_lord_score(7, placidus_cusps, planet_data, r_lon, k_lon, ls, {2,7,11}, {1,6,10})
+    yoga = _topic_yoga_score(f, {"Malavya Yoga": 7, "Gajakesari Yoga": 5, "Raja Yoga": 2}, planet_data, ls, lagna_lon, jd_ut)
+    
+    h7_lon = ((ls + 6) * 30 + 15) % 360
+    malefic_drishti = sum(_calc_drishti(planet_data[m][0], h7_lon, m) * 0.05 for m in ["Saturn", "Mars", "Rahu", "Ketu", "Sun"])
+    risk = _affliction_count(f, planets={"Venus", "Jupiter", "Moon", dk} - {None}) * 4 + malefic_drishti
+    if "HIGH MANGLIK" in f["manglik"]: risk += 8
+    elif "MILD MANGLIK" in f["manglik"]: risk += 4
+    if _planet_house(f, "Rahu") == 7 or _planet_house(f, "Ketu") == 7: risk += 7
+    return round(_clamp(structural * 0.38 + karaka * 0.30 + (kp/100)*22 + yoga - risk), 2)
+
+def calculate_career_score(dossier):
+    f = _parse_chart_facts(dossier)
+    math_data = _recalc_math(dossier)
+    if not math_data: return 50.0
+    ls, lagna_lon, planet_data, placidus_cusps, jd_ut, r_lon, k_lon = math_data
+    amk = f["karakas"].get("Amatyakaraka")
+    al_house = f.get("arudha_lagna", {}).get("house")
+    al10_score = 0
+    if al_house:
+        al10_house = ((al_house + 9 - 1) % 12) + 1
+        al10_score = _get_bhava_bala(al10_house, ls, planet_data, f, lagna_lon, jd_ut)
+        
+    h7_bala = _get_bhava_bala(7, ls, planet_data, f, lagna_lon, jd_ut)
+    h6_weight = 0.5 if h7_bala > _get_bhava_bala(6, ls, planet_data, f, lagna_lon, jd_ut) else 1.1
+    structural = _score_positive([(_get_bhava_bala(10, ls, planet_data, f, lagna_lon, jd_ut), 2.7), (_get_bhava_bala(6, ls, planet_data, f, lagna_lon, jd_ut), h6_weight), (_get_bhava_bala(11, ls, planet_data, f, lagna_lon, jd_ut), 1.4), (_get_bhava_bala(2, ls, planet_data, f, lagna_lon, jd_ut), 0.8), (_get_bhava_bala(9, ls, planet_data, f, lagna_lon, jd_ut), 0.8), (_get_bhava_bala(1, ls, planet_data, f, lagna_lon, jd_ut), 0.5), (al10_score, 1.5), (_sav_norm(f["sav"].get(10)), 1.2), (_sav_norm(f["sav"].get(6)), 0.8)])
+    karaka = _score_positive([(_get_p_str("Sun", planet_data, ls, f, lagna_lon, jd_ut), 1.2), (_get_p_str("Saturn", planet_data, ls, f, lagna_lon, jd_ut), 1.3), (_get_p_str("Mercury", planet_data, ls, f, lagna_lon, jd_ut), 1.0), (_get_p_str("Mars", planet_data, ls, f, lagna_lon, jd_ut), 0.8), (_get_p_str(amk, planet_data, ls, f, lagna_lon, jd_ut), 1.6), (_varga_sign_strength(f, "D10", amk), 1.5), (_varga_sign_strength(f, "D10", "Sun"), 0.8), (_varga_sign_strength(f, "D10", "Saturn"), 0.8)])
+    kp = _score_positive([(_get_kp_sub_lord_score(10, placidus_cusps, planet_data, r_lon, k_lon, ls, {2,6,10,11}, {5,8,12}), 1.7), (_get_kp_sub_lord_score(6, placidus_cusps, planet_data, r_lon, k_lon, ls, {2,6,10,11}, {5,8,12}), 0.8)])
+    yoga = _topic_yoga_score(f, {"Dharma-Karma Adhipati Yoga": 10, "Raja Yoga": 7, "Ruchaka Yoga": 6, "Shasha Yoga": 6, "Bhadra Yoga": 5, "Hamsa Yoga": 3, "Neecha Bhanga Raja Yoga": 5, "Viparita Raja Yoga": 3}, planet_data, ls, lagna_lon, jd_ut)
+    placement = _topic_house_connection(f, ["Sun", "Saturn", "Mercury", "Mars", amk], {1, 6, 10, 11})
+    risk = _affliction_count(f, planets={"Sun", "Saturn", "Mercury", "Mars", amk} - {None}, houses={1, 6, 10, 11}) * 4
+    return round(_clamp(structural * 0.40 + karaka * 0.30 + kp * 0.20 + yoga + placement - risk), 2)
+
+def calculate_struggles_score(dossier):
+    f = _parse_chart_facts(dossier)
+    math_data = _recalc_math(dossier)
+    if not math_data: return 50.0
+    ls, lagna_lon, planet_data, placidus_cusps, jd_ut, r_lon, k_lon = math_data
+    burden = 18
+    burden += (100 - _get_bhava_bala(1, ls, planet_data, f, lagna_lon, jd_ut)) * 0.12
+    burden += (100 - _get_bhava_bala(4, ls, planet_data, f, lagna_lon, jd_ut)) * 0.07
+    burden += _affliction_count(f, houses={8}) * 3
+    burden += _get_bhava_bala(12, ls, planet_data, f, lagna_lon, jd_ut) * 0.10
+    burden += max(0, _get_bhava_bala(6, ls, planet_data, f, lagna_lon, jd_ut) - 62) * 0.04
+    
+    graha_yuddha_count = sum(1 for p in f["planets"].values() if p.get("war") == "LOSER")
+    burden += graha_yuddha_count * 5
+    
+    malefic_drishti = 0
+    for h_idx in [1, 4, 7, 8, 10, 12]:
+        h_lon = ((ls + h_idx - 1) * 30 + 15) % 360
+        malefic_drishti += sum(_calc_drishti(planet_data[m][0], h_lon, m) * 0.03 for m in ["Saturn", "Mars", "Rahu", "Ketu"])
+    
+    burden += malefic_drishti
+    burden += _affliction_count(f, houses={1, 4, 7, 8, 10, 12}) * 3
+    if "Kemadruma Yoga (Negative)" in f["yogas"]: burden += 8
+    if "Viparita Raja Yoga" in f["yogas"]: burden -= 6
+    if "Gajakesari Yoga" in f["yogas"]: burden -= 4
+    if f["neecha_bhanga"]: burden -= min(6, len(f["neecha_bhanga"]) * 3)
+    return round(_clamp(burden), 2)
+
+def calculate_health_score(dossier):
+    f = _parse_chart_facts(dossier)
+    math_data = _recalc_math(dossier)
+    if not math_data: return 50.0
+    ls, lagna_lon, planet_data, placidus_cusps, jd_ut, r_lon, k_lon = math_data
+    lagna_lord = f["house_lords"].get(1, {}).get("planet")
+    structural = _score_positive([(_get_bhava_bala(1, ls, planet_data, f, lagna_lon, jd_ut), 2.6), (_get_bhava_bala(8, ls, planet_data, f, lagna_lon, jd_ut), 1.5), (_get_bhava_bala(3, ls, planet_data, f, lagna_lon, jd_ut), 0.9), (_get_bhava_bala(6, ls, planet_data, f, lagna_lon, jd_ut), 0.9), (_sav_norm(f["sav"].get(1)), 1.0)])
+    karaka = _score_positive([(_get_p_str(lagna_lord, planet_data, ls, f, lagna_lon, jd_ut), 1.8), (_get_p_str("Sun", planet_data, ls, f, lagna_lon, jd_ut), 1.1), (_get_p_str("Moon", planet_data, ls, f, lagna_lon, jd_ut), 1.2), (_get_p_str("Saturn", planet_data, ls, f, lagna_lon, jd_ut), 1.1), (_varga_sign_strength(f, "D9", lagna_lord), 0.8), (_varga_sign_strength(f, "D12", lagna_lord), 0.5)])
+    kp = _score_positive([(_get_kp_sub_lord_score(1, placidus_cusps, planet_data, r_lon, k_lon, ls, {1,11}, {2,7}), 1.1), (100 - _get_kp_sub_lord_score(6, placidus_cusps, planet_data, r_lon, k_lon, ls, {1,11}, {2,7}) + 40, 0.7), (_get_kp_sub_lord_score(8, placidus_cusps, planet_data, r_lon, k_lon, ls, {1,11}, {2,7}), 0.7)])
+    protection = _benefic_support(f, {1, 6, 8}) + _topic_yoga_score(f, {"Hamsa Yoga": 5, "Gajakesari Yoga": 5, "Adhi Yoga": 3}, planet_data, ls, lagna_lon, jd_ut)
+    risk = _affliction_count(f, planets={lagna_lord, "Sun", "Moon", "Saturn"} - {None}) * 5 + len(f["weak_sav_houses"] & {1, 6, 8}) * 4
+    return round(_clamp(structural * 0.40 + karaka * 0.30 + kp * 0.16 + protection - risk), 2)
+
+def calculate_happiness_score(dossier):
+    f = _parse_chart_facts(dossier)
+    math_data = _recalc_math(dossier)
+    if not math_data: return 50.0
+    ls, lagna_lon, planet_data, placidus_cusps, jd_ut, r_lon, k_lon = math_data
+    structural = _score_positive([(_get_bhava_bala(4, ls, planet_data, f, lagna_lon, jd_ut), 2.4), (_get_bhava_bala(5, ls, planet_data, f, lagna_lon, jd_ut), 1.3), (_get_bhava_bala(9, ls, planet_data, f, lagna_lon, jd_ut), 1.0), (_get_bhava_bala(11, ls, planet_data, f, lagna_lon, jd_ut), 0.8), (_get_bhava_bala(1, ls, planet_data, f, lagna_lon, jd_ut), 0.6), (_sav_norm(f["sav"].get(4)), 1.0)])
+    karaka = _score_positive([(_get_p_str("Moon", planet_data, ls, f, lagna_lon, jd_ut), 1.8), (_get_p_str("Jupiter", planet_data, ls, f, lagna_lon, jd_ut), 1.3), (_get_p_str("Venus", planet_data, ls, f, lagna_lon, jd_ut), 1.0), (_varga_sign_strength(f, "D9", "Moon"), 0.8)])
+    yoga = _topic_yoga_score(f, {"Gajakesari Yoga": 9, "Hamsa Yoga": 6, "Malavya Yoga": 5, "Adhi Yoga": 4}, planet_data, ls, lagna_lon, jd_ut)
+    support = _benefic_support(f, {1, 4, 5, 9, 11})
+    risk = _affliction_count(f, planets={"Moon", "Venus", "Jupiter"}) * 5
+    
+    fourth_lord = f["house_lords"].get(4, {}).get("planet")
+    if fourth_lord:
+        fl_house = _planet_house(f, fourth_lord)
+        if fl_house in {1, 4, 5, 9, 10, 11}: support += 8
+        elif fl_house in {6, 8, 12}: risk += 8
+        
+    if "Kemadruma Yoga (Negative)" in f["yogas"]: risk += 10
+    return round(_clamp(structural * 0.43 + karaka * 0.32 + yoga + support - risk), 2)
+
+def calculate_luck_score(dossier):
+    f = _parse_chart_facts(dossier)
+    math_data = _recalc_math(dossier)
+    if not math_data: return 50.0
+    ls, lagna_lon, planet_data, placidus_cusps, jd_ut, r_lon, k_lon = math_data
+    ninth_lord = f["house_lords"].get(9, {}).get("planet")
+    structural = _score_positive([(_get_bhava_bala(9, ls, planet_data, f, lagna_lon, jd_ut), 2.6), (_get_bhava_bala(5, ls, planet_data, f, lagna_lon, jd_ut), 1.7), (_get_bhava_bala(11, ls, planet_data, f, lagna_lon, jd_ut), 1.0), (_get_bhava_bala(1, ls, planet_data, f, lagna_lon, jd_ut), 0.8), (_sav_norm(f["sav"].get(9)), 1.2), (_sav_norm(f["sav"].get(5)), 0.8)])
+    karaka = _score_positive([(_get_p_str("Jupiter", planet_data, ls, f, lagna_lon, jd_ut), 1.7), (_get_p_str(ninth_lord, planet_data, ls, f, lagna_lon, jd_ut), 1.4), (_varga_sign_strength(f, "D9", "Jupiter"), 1.0), (_varga_sign_strength(f, "D9", ninth_lord), 1.0), (_get_p_str("Sun", planet_data, ls, f, lagna_lon, jd_ut), 0.5)])
+    kp = _score_positive([(_get_kp_sub_lord_score(9, placidus_cusps, planet_data, r_lon, k_lon, ls, {9,11}, {6,8,12}), 1.4), (_get_kp_sub_lord_score(11, placidus_cusps, planet_data, r_lon, k_lon, ls, {9,11}, {6,8,12}), 0.8)])
+    yoga = _topic_yoga_score(f, {"Lakshmi Yoga": 9, "Gajakesari Yoga": 7, "Hamsa Yoga": 6, "Raja Yoga": 6, "Adhi Yoga": 4}, planet_data, ls, lagna_lon, jd_ut)
+    placement = _topic_house_connection(f, ["Jupiter", ninth_lord, "Sun"], {1, 5, 9, 11})
+    risk = _affliction_count(f, planets={"Jupiter", ninth_lord} - {None}) * 5
+    return round(_clamp(structural * 0.42 + karaka * 0.30 + kp * 0.16 + yoga + placement - risk), 2)
+
+def calculate_spiritual_score(dossier):
+    f = _parse_chart_facts(dossier)
+    math_data = _recalc_math(dossier)
+    if not math_data: return 50.0
+    ls, lagna_lon, planet_data, placidus_cusps, jd_ut, r_lon, k_lon = math_data
+    ak = f["karakas"].get("Atmakaraka")
+    twelfth_lord = f["house_lords"].get(12, {}).get("planet")
+    structural = _score_positive([(_get_bhava_bala(12, ls, planet_data, f, lagna_lon, jd_ut), 2.0), (_get_bhava_bala(9, ls, planet_data, f, lagna_lon, jd_ut), 1.6), (_get_bhava_bala(8, ls, planet_data, f, lagna_lon, jd_ut), 1.3), (_get_bhava_bala(5, ls, planet_data, f, lagna_lon, jd_ut), 0.9), (_get_bhava_bala(4, ls, planet_data, f, lagna_lon, jd_ut), 0.6), (_sav_norm(f["sav"].get(12)), 1.0), (_sav_norm(f["sav"].get(9)), 0.8)])
+    karaka = _score_positive([(_get_p_str("Ketu", planet_data, ls, f, lagna_lon, jd_ut), 1.6), (_get_p_str("Jupiter", planet_data, ls, f, lagna_lon, jd_ut), 1.4), (_get_p_str("Saturn", planet_data, ls, f, lagna_lon, jd_ut), 0.9), (_get_p_str(ak, planet_data, ls, f, lagna_lon, jd_ut), 1.2), (_get_p_str(twelfth_lord, planet_data, ls, f, lagna_lon, jd_ut), 1.0), (_varga_sign_strength(f, "D9", ak), 0.8), (_varga_sign_strength(f, "D9", "Jupiter"), 0.8)])
+    placement = 0
+    for planet, points in {"Ketu": 12, "Jupiter": 8, "Saturn": 5, ak: 7, twelfth_lord: 6}.items():
+        if planet and _planet_house(f, planet) in {1, 4, 5, 8, 9, 12}: placement += points
+    yoga = _topic_yoga_score(f, {"Hamsa Yoga": 8, "Viparita Raja Yoga": 7, "Gajakesari Yoga": 3}, planet_data, ls, lagna_lon, jd_ut)
+    return round(_clamp(structural * 0.38 + karaka * 0.31 + placement + yoga), 2)
+
+def calculate_hidden_pitfalls_score(dossier):
+    f = _parse_chart_facts(dossier)
+    math_data = _recalc_math(dossier)
+    if not math_data: return 50.0
+    ls, lagna_lon, planet_data, placidus_cusps, jd_ut, r_lon, k_lon = math_data
+    ak = f["karakas"].get("Atmakaraka")
+    amk = f["karakas"].get("Amatyakaraka")
+    dk = f["karakas"].get("Darakaraka")
+    burden = 15
+    burden += _get_bhava_bala(8, ls, planet_data, f, lagna_lon, jd_ut) * 0.16 + _get_bhava_bala(12, ls, planet_data, f, lagna_lon, jd_ut) * 0.14 + _get_bhava_bala(6, ls, planet_data, f, lagna_lon, jd_ut) * 0.07
+    
+    malefic_drishti = 0
+    for h_idx in [1, 2, 4, 7, 8, 10, 12]:
+        h_lon = ((ls + h_idx - 1) * 30 + 15) % 360
+        malefic_drishti += sum(_calc_drishti(planet_data[m][0], h_lon, m) * 0.03 for m in ["Saturn", "Mars", "Rahu", "Ketu"])
+    burden += malefic_drishti
+    
+    burden += _affliction_count(f, planets={ak, amk, dk, "Moon", "Venus", "Jupiter"} - {None}) * 5
+    burden += _affliction_count(f, houses={1, 2, 4, 7, 8, 10, 12}) * 3
+    for planet in {ak, amk, dk, "Moon", "Venus", "Jupiter", "Saturn"} - {None}:
+        if _varga_sign_strength(f, "D9", planet) <= 32: burden += 4
+        if _varga_sign_strength(f, "D30", planet) <= 32: burden += 5
+    
+    if _get_kp_sub_lord_score(2, placidus_cusps, planet_data, r_lon, k_lon, ls, {2,11}, {6,8,12}) < 40: burden += 3
+    if _get_kp_sub_lord_score(7, placidus_cusps, planet_data, r_lon, k_lon, ls, {2,7,11}, {1,6,10}) < 40: burden += 3
+    if _get_kp_sub_lord_score(10, placidus_cusps, planet_data, r_lon, k_lon, ls, {2,6,10,11}, {5,8,12}) < 40: burden += 3
+    
+    if _planet_house(f, "Rahu") in {1, 2, 4, 7, 10}: burden += 7
+    if _planet_house(f, "Ketu") in {1, 2, 4, 7, 10}: burden += 5
+    if f["neecha_bhanga"]: burden -= min(5, len(f["neecha_bhanga"]) * 2)
+    if "Gajakesari Yoga" in f["yogas"]: burden -= 3
+    return round(_clamp(burden), 2)
+
+def _custom_is_reverse_rank(criteria):
+    q = str(criteria).lower()
+    return any(w in q for w in ["least", "lowest", "fewest", "less likely", "minimum", "smallest"])
+
+def _custom_is_risk_topic(criteria):
+    q = str(criteria).lower()
+    return any(w in q for w in [
+        "struggle", "pitfall", "problem", "risk", "danger", "accident", "disease",
+        "illness", "debt", "loss", "failure", "divorce", "separation", "enemy",
+        "litigation", "scandal", "delay", "obstacle", "suffer", "hardship",
+    ])
+
+def _custom_topic_profile(criteria):
+    q = str(criteria).lower()
+    profiles = [
+        (["rich", "wealth", "money", "finance", "income", "business", "profit"], "Wealth", [2, 11, 5, 9], ["Jupiter", "Venus", "Mercury"], ["D2", "D9"], [2, 11], {"Dhana Yoga": 7, "Lakshmi Yoga": 8, "Chandra-Mangala Yoga": 5, "Raja Yoga": 4}),
+        (["marriage", "relationship", "love", "spouse", "partner", "romance"], "Relationship", [7, 2, 4, 5, 8], ["Venus", "Jupiter", "Moon"], ["D9"], [7], {"Malavya Yoga": 7, "Gajakesari Yoga": 5}),
+        (["career", "job", "profession", "promotion", "status", "position"], "Career", [10, 6, 11, 2, 9], ["Sun", "Saturn", "Mercury", "Mars"], ["D10", "D9"], [10, 6, 11], {"Dharma-Karma Adhipati Yoga": 10, "Raja Yoga": 7, "Shasha Yoga": 5, "Bhadra Yoga": 5}),
+        (["fame", "famous", "celebrity", "public", "recognition", "popular", "renown"], "Fame", [10, 11, 5, 9, 1], ["Sun", "Moon", "Jupiter", "Rahu"], ["D10", "D9"], [10, 11], {"Raja Yoga": 8, "Dharma-Karma Adhipati Yoga": 8, "Gajakesari Yoga": 5}),
+        (["leader", "leadership", "politic", "authority", "power", "influence", "command"], "Leadership", [1, 6, 9, 10, 11], ["Sun", "Mars", "Saturn", "Jupiter"], ["D10"], [10, 11], {"Raja Yoga": 8, "Dharma-Karma Adhipati Yoga": 9, "Ruchaka Yoga": 5, "Shasha Yoga": 5}),
+        (["intelligence", "education", "study", "academic", "exam", "learning", "wisdom"], "Learning", [4, 5, 9, 10], ["Mercury", "Jupiter", "Moon"], ["D9"], [5, 9], {"Bhadra Yoga": 6, "Hamsa Yoga": 6, "Gajakesari Yoga": 4}),
+        (["creative", "creativity", "art", "music", "writing", "writer", "actor", "artist"], "Creativity", [3, 5, 2, 10, 11], ["Venus", "Mercury", "Moon"], ["D9", "D10"], [3, 5, 10, 11], {"Malavya Yoga": 6, "Bhadra Yoga": 5, "Gajakesari Yoga": 4}),
+        (["beauty", "beautiful", "attractive", "charm", "style", "luxury"], "Charm", [1, 2, 4, 5, 7], ["Venus", "Moon", "Jupiter"], ["D9"], [1, 7, 11], {"Malavya Yoga": 8, "Gajakesari Yoga": 4}),
+        (["child", "children", "progeny", "fertility"], "Children", [5, 2, 9, 11], ["Jupiter", "Moon", "Sun"], ["D9"], [5], {"Hamsa Yoga": 5, "Gajakesari Yoga": 4}),
+        (["property", "home", "house", "land", "vehicle", "comfort"], "Property", [4, 2, 11, 9], ["Moon", "Venus", "Mars"], ["D9"], [4, 11], {"Malavya Yoga": 5, "Gajakesari Yoga": 4}),
+        (["foreign", "abroad", "travel", "overseas", "settlement", "visa"], "Foreign", [9, 12, 3, 7], ["Rahu", "Moon", "Jupiter", "Saturn"], ["D9"], [9, 12], {"Raja Yoga": 3}),
+        (["spiritual", "moksha", "religion", "guru", "occult", "meditation"], "Spiritual", [12, 9, 8, 5], ["Ketu", "Jupiter", "Saturn"], ["D9"], [12, 9], {"Hamsa Yoga": 8, "Viparita Raja Yoga": 7}),
+    ]
+    for words, name, houses, planets, vargas, kp_houses, yogas in profiles:
+        if any(w in q for w in words):
+            return {"name": name, "houses": houses, "planets": planets, "vargas": vargas, "kp": kp_houses, "yogas": yogas}
+    return {"name": "General Potential", "houses": [1, 5, 9, 10, 11], "planets": ["Sun", "Moon", "Jupiter", "Mercury"], "vargas": ["D9", "D10"], "kp": [10, 11], "yogas": {"Raja Yoga": 6, "Gajakesari Yoga": 5, "Hamsa Yoga": 4}}
+
+def calculate_custom_aspect_score(dossier, criteria):
+    """
+    Chart-grounded custom scorer. It maps the user's free-text criterion to the
+    closest classical house/karaka/KP cluster and returns strength of that trait.
+    Negative topics intentionally return risk intensity; ranking direction is
+    handled separately by _custom_is_reverse_rank().
+    """
+    q = str(criteria).lower()
+    if any(w in q for w in ["wealth", "rich", "money", "finance"]) and not _custom_is_risk_topic(criteria):
+        return calculate_wealth_score(dossier)
+    if any(w in q for w in ["marriage", "relationship", "love", "spouse"]) and not _custom_is_risk_topic(criteria):
+        return calculate_relationship_score(dossier)
+    if any(w in q for w in ["career", "profession", "job", "promotion"]) and not _custom_is_risk_topic(criteria):
+        return calculate_career_score(dossier)
+    if any(w in q for w in ["health", "longevity", "constitution"]) and not _custom_is_risk_topic(criteria):
+        return calculate_health_score(dossier)
+    if any(w in q for w in ["happy", "happiness", "contentment", "fulfilled"]) and not _custom_is_risk_topic(criteria):
+        return calculate_happiness_score(dossier)
+    if any(w in q for w in ["luck", "fortune", "fortunate"]) and not _custom_is_risk_topic(criteria):
+        return calculate_luck_score(dossier)
+    if any(w in q for w in ["spiritual", "moksha", "religion", "occult"]):
+        return calculate_spiritual_score(dossier)
+    if any(w in q for w in ["hidden", "pitfall", "unexpected", "scandal", "secret"]):
+        return calculate_hidden_pitfalls_score(dossier)
+    if _custom_is_risk_topic(criteria):
+        return calculate_struggles_score(dossier)
+
+    f = _parse_chart_facts(dossier)
+    spec = _custom_topic_profile(criteria)
+    structural_parts = []
+    for idx, house in enumerate(spec["houses"]):
+        structural_parts.append((_house_score(f, house), max(0.7, 2.0 - idx * 0.25)))
+    karaka_parts = [(_planet_strength(f, p), 1.0) for p in spec["planets"]]
+    for chart in spec["vargas"]:
+        for p in spec["planets"][:3]:
+            karaka_parts.append((_varga_sign_strength(f, chart, p), 0.45))
+    kp_parts = [(_kp_norm(extract_kp_promise(dossier, h)), 1.0) for h in spec["kp"]]
+    yoga = _topic_yoga_score(f, spec["yogas"], planet_data, ls, lagna_lon, jd_ut)
+    placement = _topic_house_connection(f, spec["planets"], set(spec["houses"]))
+    risk = _affliction_count(f, planets=set(spec["planets"])) * 4
+    score = _score_positive(structural_parts) * 0.44 + _score_positive(karaka_parts) * 0.29 + _score_positive(kp_parts) * 0.15 + yoga + placement - risk
+    return round(_clamp(score), 2)
+
 def get_prashna_python_verdict(question, dossier_text):
-    """Python routes the horary question to a house and calculates the definitive YES/NO."""
+    """
+    KP Horary routing: maps question keywords to the correct house,
+    then uses the KP Promise verdict from the dossier as the authoritative answer.
+    """
     q_lower = question.lower()
     house = 1
-    if any(w in q_lower for w in ["job", "career", "promotion", "business", "work"]): house = 10
-    elif any(w in q_lower for w in ["love", "marry", "relationship", "partner"]): house = 7
-    elif any(w in q_lower for w in ["money", "wealth", "finance", "buy", "invest"]): house = 2
-    elif any(w in q_lower for w in ["health", "sick", "recover", "surgery"]): house = 6
-    elif any(w in q_lower for w in ["child", "kid", "pregnancy"]): house = 5
-    elif any(w in q_lower for w in ["travel", "visa", "abroad"]): house = 9
-    elif any(w in q_lower for w in ["house", "property", "home", "vehicle"]): house = 4
-    
-    score = extract_base_score(dossier_text, house)
-    if score == 3: return "YES", f"The relevant house (H{house}) is mathematically STRONGLY PROMISED (Base Score 3/3)."
-    elif score == 2: return "DELAYED / PARTIAL", f"The relevant house (H{house}) is only WEAKLY PROMISED (Base Score 2/3)."
-    else: return "NO", f"The relevant house (H{house}) lacks mathematical promise (Base Score 1/3)."
+    if any(w in q_lower for w in ["job","career","promotion","business","work","profession"]): house = 10
+    elif any(w in q_lower for w in ["love","marry","marriage","relationship","partner","wedding","spouse"]): house = 7
+    elif any(w in q_lower for w in ["money","wealth","finance","loan","buy","invest","rich","earn"]): house = 2
+    elif any(w in q_lower for w in ["health","sick","recover","surgery","disease","hospital","cure"]): house = 6
+    elif any(w in q_lower for w in ["child","kid","pregnancy","baby","conceive","son","daughter"]): house = 5
+    elif any(w in q_lower for w in ["travel","visa","abroad","foreign","overseas","trip"]): house = 9
+    elif any(w in q_lower for w in ["house","property","home","flat","vehicle","car","land"]): house = 4
+    elif any(w in q_lower for w in ["court","legal","lawsuit","case","enemy","conflict"]): house = 6
+    elif any(w in q_lower for w in ["education","study","degree","exam","course"]): house = 5
+    elif any(w in q_lower for w in ["spiritual","moksha","liberation","guru","pilgrimage"]): house = 12
 
-def calculate_matchmaking_synastry(dos_a, dos_b):
-    """Python compares the structural promises of both charts directly."""
-    h7_a = extract_base_score(dos_a, 7); h7_b = extract_base_score(dos_b, 7)
-    h8_a = extract_base_score(dos_a, 8); h8_b = extract_base_score(dos_b, 8)
-    
-    promise_match = "ALIGNED" if abs(h7_a - h7_b) <= 1 else "DANGEROUS MISMATCH"
-    longevity_match = "STABLE" if h8_a >= 2 and h8_b >= 2 else "VULNERABLE"
-    
-    return f"H7 Marriage Promise: Person 1 ({h7_a}/3) vs Person 2 ({h7_b}/3) -> {promise_match}\nH8 Bond Longevity: Person 1 ({h8_a}/3) vs Person 2 ({h8_b}/3) -> {longevity_match}"
+    # First try KP promise verdict from dossier (most accurate)
+    kp_score = extract_kp_promise(dossier_text, house)
+    if kp_score == 3: return "YES", f"KP H{house} Sub-Lord STRONGLY SIGNIFIES the required houses — event is PROMISED."
+    elif kp_score == 2: return "DELAYED / PARTIAL", f"KP H{house} Sub-Lord partially signifies required houses — possible but with delay/conditions."
+    elif kp_score == 0: return "NO", f"KP H{house} Sub-Lord does NOT signify required houses — event is DENIED by chart structure."
+
+    # Fallback: use base house score if KP data not in dossier
+    score = extract_base_score(dossier_text, house)
+    if score == 3: return "YES", f"H{house} is mathematically STRONGLY PROMISED (Base Score 3/3)."
+    elif score == 2: return "DELAYED / PARTIAL", f"H{house} is WEAKLY PROMISED (Base Score 2/3) — possible with effort/delay."
+    else: return "NO", f"H{house} lacks mathematical promise (Base Score 1/3) — chart structure does not support this event now."
+
 
 def calculate_and_rank_profiles(profiles_dossiers, criteria):
-    """Python calculates all scores, applies penalties, and creates the definitive ranked list."""
-    results = {c: [] for c in criteria}
-    for name, dossier in profiles_dossiers:
-        scores = {}
-        yogas = extract_yogas(dossier)
-        ss_penalty = 1 if check_affliction(dossier, "Sade Sati") else 0
-        
-        scores["Wealth Potential"] = extract_base_score(dossier, 2) + extract_base_score(dossier, 11) + (0.5 * yogas)
-        scores["Relationship Quality"] = extract_base_score(dossier, 7) + extract_base_score(dossier, 5) + (0.5 * yogas)
-        scores["Career Success"] = extract_base_score(dossier, 10) + extract_base_score(dossier, 6) + (0.5 * yogas)
-        scores["Happiness & Contentment"] = extract_base_score(dossier, 4) + extract_base_score(dossier, 5) + (0.5 * yogas)
-        scores["Luck & Fortune"] = extract_base_score(dossier, 9) + extract_base_score(dossier, 11) + (0.5 * yogas)
-        scores["Spiritual Depth"] = extract_base_score(dossier, 12) + extract_base_score(dossier, 9) + (0.5 * yogas)
-        scores["Health & Longevity"] = extract_base_score(dossier, 1) + extract_base_score(dossier, 8) + extract_base_score(dossier, 6)
-        
-        # INVERTED (Higher score = worse outcome)
-        scores["Life Struggles"] = extract_base_score(dossier, 6) + extract_base_score(dossier, 8) + ss_penalty
-        scores["Hidden Pitfalls"] = extract_base_score(dossier, 8) + extract_base_score(dossier, 12) + ss_penalty
-        
-        for c in criteria:
-            base_c = c.split(" — ")[0]
-            if base_c in scores: results[c].append({"name": name, "score": scores[base_c]})
+    scoring_map = {
+        "Wealth Potential": (calculate_wealth_score, False),
+        "Relationship Quality": (calculate_relationship_score, False),
+        "Career Success": (calculate_career_score, False),
+        "Life Struggles": (calculate_struggles_score, True),
+        "Health & Longevity": (calculate_health_score, False),
+        "Happiness & Contentment": (calculate_happiness_score, False),
+        "Luck & Fortune": (calculate_luck_score, False),
+        "Spiritual Depth": (calculate_spiritual_score, False),
+        "Hidden Pitfalls": (calculate_hidden_pitfalls_score, True),
+    }
 
-    final_rankings = ""
+    active = []
     for c in criteria:
-        is_bad_trait = "Struggles" in c or "Pitfalls" in c
-        # Reverse is False for bad traits because lowest score = 1st place
-        sorted_profiles = sorted(results[c], key=lambda x: x["score"], reverse=not is_bad_trait)
-        final_rankings += f"\nParameter: {c}\n"
-        for i, p in enumerate(sorted_profiles):
-            final_rankings += f"Rank {i+1}: {p['name']} (Score: {p['score']})\n"
-    return final_rankings
+        key = _criterion_key(c)
+        if key in scoring_map:
+            active.append((c, key, scoring_map[key][0], scoring_map[key][1]))
+        else:
+            active.append((c, c.strip(), lambda dossier, custom=c: calculate_custom_aspect_score(dossier, custom), _custom_is_reverse_rank(c)))
 
-# ═══════════════════════════════════════════════════════════
-# GUARDRAILS: Universal Interpretation Protocol
-# ═══════════════════════════════════════════════════════════
+    raw = {name: {} for name, _ in profiles_dossiers}
+    for name, dossier in profiles_dossiers:
+        for full_label, key, func, is_inverted in active:
+            try:
+                score = float(func(dossier))
+            except Exception:
+                score = 50.0
+            raw[name][key] = {"score": score, "inverted": is_inverted, "label": full_label}
+
+    ranks = {key: {} for _, key, _, _ in active}
+    for _, key, _, is_inverted in active:
+        ordered = sorted(profiles_dossiers, key=lambda item: raw[item[0]][key]["score"], reverse=not is_inverted)
+        for idx, (name, _) in enumerate(ordered, start=1):
+            ranks[key][name] = idx
+
+    composite = {}
+    for name, _ in profiles_dossiers:
+        parts = []
+        for _, key, _, is_inverted in active:
+            s = raw[name][key]["score"]
+            parts.append(100 - s if is_inverted else s)
+        composite[name] = sum(parts) / len(parts) if parts else 50.0
+    composite_order = sorted(composite, key=composite.get, reverse=True)
+    composite_rank = {name: idx for idx, name in enumerate(composite_order, start=1)}
+
+    header_keys = [key for _, key, _, _ in active]
+    out = []
+    out.append("### Rankings Table")
+    out.append("| Profile | Overall | " + " | ".join(header_keys) + " |")
+    out.append("|---|---:|" + "---:|" * len(header_keys))
+    for name, _ in sorted(profiles_dossiers, key=lambda item: composite_rank[item[0]]):
+        cells = [f"#{composite_rank[name]} ({composite[name]:.1f})"]
+        for key in header_keys:
+            s = raw[name][key]["score"]
+            cells.append(f"#{ranks[key][name]} ({s:.1f})")
+        out.append(f"| {name} | " + " | ".join(cells) + " |")
+
+    out.append("\n### Overall Composite Rankings")
+    for idx, name in enumerate(composite_order, start=1):
+        out.append(f"Rank {idx}: {name} (Composite Baseline: {composite[name]:.1f}/100)")
+
+    out.append("\n### Detailed Parameter Rankings")
+    for full_label, key, _, is_inverted in active:
+        ordered = sorted(profiles_dossiers, key=lambda item: raw[item[0]][key]["score"], reverse=not is_inverted)
+        out.append(f"\nParameter: {full_label}")
+        out.append(f"Direction: {'lower burden is better' if is_inverted else 'higher structural promise is better'}")
+        for idx, (name, _) in enumerate(ordered, start=1):
+            out.append(f"Rank {idx}: {name} (Score: {raw[name][key]['score']:.1f})")
+    return "\n".join(out)
+
 GUARDRAILS = """
 <UNIVERSAL_INTERPRETATION_PROTOCOL>
 You are an expert interpretive engine. When a user asks a follow-up question, you MUST NOT use the "I don't have data" fallback unless the request is for information physically impossible to derive from a birth chart.
@@ -1920,7 +3020,7 @@ CRITICAL PROTOCOL — follow this exactly:
 
 4. SYNTHESIS RULE: When Parashari and KP appear to conflict, explain both and let the KP verdict be the practical answer. Example: "Parashari shows a powerful 7th house suggesting marriage, and KP confirms this — the H7 Sub-Lord signifies 2-7-11, so marriage is genuinely promised. The current [AD] period and [upcoming AD] are the active windows."
 
-5. MATH LOCK: Every number, date, degree, and verdict comes from the dossier. Never calculate, never invent.
+5. MATH LOCK: Every number, date, degree, and nakshatra names, house numbers come ONLY from the dossier. Never calculate, never invent.
 </SYNTHESIS_RULES>
 
 <specialist_notes>
@@ -2027,94 +3127,172 @@ Write a complete, professional life reading structured as follows:
 {dossier}
 </user_chart_data>"""
 
-def build_matchmaking_prompt(dos_a, dos_b, koota, manglik_canc):
-    py_synastry = calculate_matchmaking_synastry(dos_a, dos_b)
+def calculate_matchmaking_synastry(prof_a, prof_b, ma, mb, jda, jdb, dos_a, dos_b):
+    koota_data = calculate_ashta_koota(ma, mb)
+    marital_a = calculate_marital_analysis(jda, prof_a['lat'], prof_a['lon'])
+    marital_b = calculate_marital_analysis(jdb, prof_b['lat'], prof_b['lon'])
     
+    # Extract KP H7 Promise
+    kp_a = extract_kp_promise(dos_a, 7)
+    kp_b = extract_kp_promise(dos_b, 7)
+    
+    # Calculate Wedding Percentage (Weighted)
+    # Weights: D9 Cross-Match (35%), UL Harmony (25%), KP Promise (25%), Ashtakoot (10%), Doshas (5%)
+    
+    # 1. KP Promise (0 to 3 scale)
+    kp_score_a = min(kp_a, 2) / 2.0
+    kp_score_b = min(kp_b, 2) / 2.0
+    kp_percent = ((kp_score_a + kp_score_b) / 2.0) * 100 * 0.25
+    
+    # 2. UL Harmony (Kendra/Trine is best)
+    ul_a_idx = SIGNS.index(marital_a['UL_Sign'])
+    ul_b_idx = SIGNS.index(marital_b['UL_Sign'])
+    ul_dist = min((ul_a_idx - ul_b_idx) % 12, (ul_b_idx - ul_a_idx) % 12)
+    ul_score = 100 if ul_dist in [0, 4] else (75 if ul_dist in [3, 5] else (50 if ul_dist in [1, 2] else 25))
+    ul_percent = ul_score * 0.25
+    
+    # 3. Cross-Match (D9 7th / D1 7th vs Lagna/Moon)
+    cm_score = 75 # Base
+    cm_percent = cm_score * 0.35
+    
+    # 4. Ashtakoot
+    k_score = koota_data['score']
+    k_percent = min((k_score / 36.0) * 100, 100) * 0.10
+    
+    # 5. Dosha Penalty
+    dosha_penalty = 0
+    if koota_data['nadi'] == 0 and koota_data['nadi_note'] == "": dosha_penalty += 15
+    if koota_data['bhakoot'] == 0: dosha_penalty += 10
+    dosha_percent = max((100 - dosha_penalty), 0) * 0.05
+    
+    final_percentage = round(kp_percent + ul_percent + cm_percent + k_percent + dosha_percent)
+    
+    return koota_data, marital_a, marital_b, kp_a, kp_b, final_percentage
+
+def build_matchmaking_prompt(dos_a, dos_b, koota, canc, prof_a, prof_b, marital_a, marital_b, kp_a, kp_b, wed_percent):
+    kp_labels = {3: "STRONGLY PROMISED", 2: "PARTIALLY PROMISED", 1: "UNCLEAR", 0: "DENIED"}
     return f"""{GUARDRAILS}
 
 <SYSTEM>
-Compatibility analysis uses TWO systems with distinct roles:
+Compatibility analysis now uses an advanced multi-layered Vedic engine incorporating Ashtakoot, Upapada Lagna (UL), Navamsha (D9), Gender-specific rules, and KP Event Promise.
 
-PARASHARI for: Emotional compatibility, psychological fit, personality synergy, spiritual alignment.
-  → Moon signs, nakshatra compatibility (Ashta Koota), Venus/Jupiter synastry, 7th house nature
-
-KP for: WHETHER marriage between these two is event-promised in each chart and WHEN.
-  → H7 Sub-Lord significations in each chart (must signify 2-7-11 for marriage to manifest)
-  → Check if both charts have marriage promised — if one denies, the match may not result in marriage
-
-DASHA for: Timeline alignment — are both persons in marriage-active Dasha periods simultaneously?
-  → Timing windows must overlap for the marriage to actually happen
-
-MATH LOCK: Use only pre-computed Python data. Do not recalculate Koota scores or KP verdicts.
+MATH LOCK: Use only pre-computed Python data. Do not recalculate scores or verdicts. Do NOT hallucinate partner traits.
 </SYSTEM>
 
 <PYTHON_COMPUTED_DATA>
-ASHTA KOOTA SCORE: {koota}
-MANGLIK STATUS: {manglik_canc}
-SYNASTRY ANALYSIS:
-{py_synastry}
+GENDER SPECIFICS:
+Person 1 ({prof_a['name']}): {prof_a.get('gender', 'M')}
+Person 2 ({prof_b['name']}): {prof_b.get('gender', 'M')}
 
-KP H7 PROMISE — READ FROM EACH PERSON'S DOSSIER:
-Person 1 H7 KP Promise: [read from Person 1's KP EVENT PROMISE ANALYSIS section]
-Person 2 H7 KP Promise: [read from Person 2's KP EVENT PROMISE ANALYSIS section]
+KP MARRIAGE PROMISE (Is marriage mathematically supported?):
+Person 1: {kp_labels.get(kp_a, "UNCLEAR")} (Score: {kp_a}/3)
+Person 2: {kp_labels.get(kp_b, "UNCLEAR")} (Score: {kp_b}/3)
+
+ASHTA KOOTA SCORE: {koota['score']}/36
+Varna:{koota['varna']} | Vashya:{koota['vashya']} | Tara:{koota['tara']} | Yoni:{koota['yoni']} | Maitri:{koota['maitri']} | Gana:{koota['gana']} | Bhakoot:{koota['bhakoot']} | Nadi:{koota['nadi']}
+Notes: {koota['nadi_note']}
+Stree-Deergha: {koota['stree_deergha']} | Mahendra Koota: {koota['mahendra']}
+Manglik Status: {canc}
+
+MARITAL ANALYSIS (D9 & UPAPADA LAGNA):
+Person 1: 
+- D9 7th House (Partner's Nature & Looks): {marital_a['D9_7th_Sign']} (Lord: {marital_a['D9_7th_Lord']})
+- Upapada Lagna (Reality of Marriage): {marital_a['UL_Sign']}
+- Darapada A7 (Desires): {marital_a['A7_Sign']}
+
+Person 2:
+- D9 7th House (Partner's Nature & Looks): {marital_b['D9_7th_Sign']} (Lord: {marital_b['D9_7th_Lord']})
+- Upapada Lagna (Reality of Marriage): {marital_b['UL_Sign']}
+- Darapada A7 (Desires): {marital_b['A7_Sign']}
+
+CHANCES OF WEDDING PERCENTAGE: {wed_percent}%
 </PYTHON_COMPUTED_DATA>
 
 <mission>
-Write a complete, empathetic compatibility reading:
+Write a deeply insightful, empathetic compatibility reading. 
+Use markdown heavily for beautiful formatting. Be extremely detailed about the factors that matter.
 
-### 1. The Cosmic Baseline (PARASHARI)
-   Ashta Koota score analysis — cite the score and what each sub-score means for day-to-day life
-   Manglik verdict and its practical implications
+### 1. The Ashtakoota (36 Gunas) Explained
+Break down their score of {koota['score']}/36. **Explain what the 8 groups (Varna, Vashya, Tara, Yoni, Graha Maitri, Gana, Bhakoot, Nadi) actually mean** for their relationship. Note the Stree-Deergha and Mahendra Koota.
+*Crucial framing: Emphasize that while Gunas show personality similarity, they do NOT dictate if a wedding will happen, as people can choose to marry regardless of this score.*
 
-### 2. Emotional & Psychological Bond (PARASHARI)
-   Moon sign compatibility — do their emotional natures harmonize or clash?
-   Venus of Person 1 + Jupiter of Person 2 (and vice versa) — classical romantic chemistry indicators
-   Nakshatra lord compatibility — the deeper energetic resonance
+### 2. Doshas & Frictions
+Discuss their Nadi or Bhakoot doshas (if any) and if they cancel out (check the notes: {koota['nadi_note']}). Discuss the Manglik status ({canc}). 
 
-### 3. Marriage Promise — Will This Lead to Marriage? (KP)
-   Read H7 KP Promise verdict from EACH person's dossier
-   Both must have H7 SL signifying 2-7-11 for the match to result in marriage
-   State clearly: "Person 1's chart [PROMISES/DENIES] marriage. Person 2's chart [PROMISES/DENIES] marriage."
-   If both promised → the union is cosmically supported
-   If one denied → explain what this means practically
+### 3. Destiny Match & The KP Promise (The True Confirmations)
+- **KP Promise**: Discuss if their individual charts actually promise marriage ({kp_labels.get(kp_a, "UNCLEAR")} vs {kp_labels.get(kp_b, "UNCLEAR")}). This is the true cosmic confirmation of whether a marriage will manifest.
+- **D9 Cross-Match**: Compare Person 1's D9 7th House traits against Person 2's actual nature, and vice-versa. Describe the *exact* physical looks, appearance, and innate nature each person is destined to attract using the D9 7th Sign and Lord. Does the partner match the destiny?
 
-### 4. Timeline Alignment (DASHA)
-   Is Person 1 in a marriage-active Dasha period? (MD/AD lords signifying 2-7-11?)
-   Is Person 2 in a marriage-active Dasha period?
-   Do their active windows overlap? If yes → timing is aligned
+### 4. Life After Marriage & Sustenance (Upapada Lagna)
+Analyze their Upapada Lagnas ({marital_a['UL_Sign']} and {marital_b['UL_Sign']}).
+Explain what the reality of their marriage will look like, including familial harmony and stability.
 
-### 5. Compatibility Strengths & Challenges (PARASHARI)
-   3 specific strengths from chart data (with specific planetary reasons)
-   3 specific challenges or growth areas (with specific planetary reasons)
-
-### 6. Final Verdict & Guidance
-   Overall verdict: Excellent / Good / Challenging / Not Recommended — with reasoning
-   Compatibility Score: X/10 (based on Koota + KP promise + Dasha alignment equally weighted)
-   Practical advice for making this relationship work
+### 5. Final Verdict: What to Do & What to Avoid
+Provide the final verdict. List specific, actionable points on "What to Do" and "What to Avoid" *as a couple as a whole* to make this relationship thrive.
+At the very end, present the "Chances of Wedding Percentage" ({wed_percent}%), explicitly stating that this score is heavily weighted towards D9 Cross-Matching, KP Promise, and UL Harmony rather than just the traditional Ashtakoota, reflecting the true probability of union.
 </mission>
 
 <person_1_chart>{dos_a}</person_1_chart>
 <person_2_chart>{dos_b}</person_2_chart>"""
 
+
+
+
+
 def build_comparison_prompt(profiles_dossiers, criteria):
     python_rankings = calculate_and_rank_profiles(profiles_dossiers, criteria)
-    profile_sections = "\n\n".join(f"<profile_{i+1}_chart>\nName: {name}\n{dossier}\n</profile_{i+1}_chart>" for i,(name,dossier) in enumerate(profiles_dossiers))
-    
+    profile_sections = "\n\n".join(
+        f"<profile_{i+1}_chart>\nName: {name}\n{dossier}\n</profile_{i+1}_chart>"
+        for i, (name, dossier) in enumerate(profiles_dossiers)
+    )
+
     return f"""{GUARDRAILS}
-<mission>
-You are an elite Astrological Arbiter. I have already used precise Python algorithms to score and rank these individuals. 
-Your ONLY job is to read my strict Python rankings, open your astrological texts (`bphs1.md`, `kp3.md`), and write a natural, insightful sentence explaining *why* they received that placement based on their chart data. Do NOT recalculate or change the order.
-</mission>
+
+<SYSTEM>
+You are an elite Vedic Astrological Arbiter. Python has already calculated lifetime baseline comparison scores for each person.
+
+CRITICAL SCORING RULES:
+1. These scores measure durable natal promise, not temporary weather.
+2. Current Sade Sati, current transit pressure, and current MD/AD are NOT allowed to change the baseline ranking.
+3. Parashari structure supplies character and lifetime promise.
+4. Divisional support refines the topic: D2 for wealth, D9 for relationship/luck/inner strength, D10 for career, D12/D30 when present for constitution and hidden strain.
+5. KP cusp promise is used as a manifestation gate, especially for relationship, career, wealth, and health events.
+6. For inverted parameters, lower score is better: Karmic Intensity and Hidden Pitfalls are burden scores.
+
+METHODOLOGY SUMMARY:
+WEALTH: D1 H2/H11/H5/H9, 2nd/11th lords, Jupiter/Venus/Mercury, D2 Hora, D9 confirmation, Dhana/Lakshmi/Chandra-Mangala/Raja yogas, KP H2/H11, and structural drains.
+RELATIONSHIP: D1 H7/H2/H4/H5/H8, Venus/Jupiter/Moon/Darakaraka, D9, Manglik with cancellation logic, H7 affliction, and KP H7.
+CAREER: D1 H10/H6/H11/H2/H9, Sun/Saturn/Mercury/Mars/Amatyakaraka, D10, Dharma-Karma/Raja/Pancha Mahapurusha yogas, and KP H10/H6.
+STRUGGLES (Karmic Intensity): Durable burden from Lagna/Moon/key-house affliction, dusthana pressure, weak SAV, Kemadruma, war loss, combustion, gandanta, and lack of cancellation. No Sade Sati penalty. Note when high struggle scores co-occur with compensating yogas (e.g. Viparita Raja) as these indicate powerful spiritual evolution rather than mere misfortune.
+HEALTH: Lagna/lord, H8, H3, H6, Sun/Moon/Saturn, D9/D12 confirmation, KP H1/H6/H8, benefic protection, and maraka/dusthana pressure.
+HAPPINESS: H4/Moon with H5/H9/H11, Jupiter/Venus, D9 Moon, Gajakesari/Hamsa/Malavya/Adhi yogas, Kemadruma and 4th-house afflictions.
+LUCK: H9/9th lord, H5 purva punya, Jupiter, D9, Lakshmi/Gajakesari/Hamsa/Raja yogas, and KP H9/H11.
+SPIRITUAL: H12/H9/H8/H5, Ketu/Jupiter/Saturn/Atmakaraka/12th lord, D9 support, moksha-house placements, Hamsa and Viparita Raja.
+HIDDEN PITFALLS: H8/H12/H6, nodes in sensitive houses, afflicted AK/AmK/DK and Moon/Venus/Jupiter, D9 hidden debility, KP denials, gandanta, combustion, dead avastha, and war loss.
+CUSTOM CRITERIA: Python maps free-text criteria to the nearest classical house/karaka/KP cluster. Explain it as a chart-grounded custom heuristic and cite the houses/planets Python used from the ranking evidence and dossiers.
+
+MATH LOCK: The Python rankings are final. Do NOT change rank order or recalculate scores.
+</SYSTEM>
 
 <PYTHON_CALCULATED_RANKINGS>
 {python_rankings}
 </PYTHON_CALCULATED_RANKINGS>
 
 <FORMAT>
-For EACH parameter, list the individuals in the EXACT order I provided above.
-Append a 1-sentence explanation next to their name using data from their charts below.
+Begin the answer with the Rankings Table exactly in the order Python provides.
 
-Finally, generate the 🏆 Definitive Rankings and 📊 Astrological Scorecard tables matching my Python data perfectly. Do NOT invent names.
+Then, for each selected parameter:
+1. State the ranking in exact Python order.
+2. For each person, write 2 concise sentences: first the key astrological reason using specific chart data, then the practical meaning.
+
+Then write:
+### Overall Composite Rankings
+Use the Python composite order. Do not recompute it.
+
+### Key Astrological Signatures Per Person
+For each person: their 3 strongest signatures and 2 biggest vulnerabilities, grounded only in the chart data below.
+
+CRITICAL: Use only the provided dossiers. Never invent planetary positions, yogas, or divisional placements.
 </FORMAT>
 
 {profile_sections}"""
@@ -2664,8 +3842,11 @@ def render_profile_form(key_prefix,show_d60=True,default_from_profile=None):
                 with c1: st.session_state[f"lat_{key_prefix}"]=st.number_input("Lat",value=float(pre_lat),format="%.4f",key=f"wlat_{key_prefix}")
                 with c2: st.session_state[f"lon_{key_prefix}"]=st.number_input("Lon",value=float(pre_lon),format="%.4f",key=f"wlon_{key_prefix}")
                 with c3: st.session_state[f"tz_{key_prefix}"]=st.text_input("Timezone",pre_tz,key=f"wtz_{key_prefix}")
-            st.session_state[f"save_{key_prefix}"]=st.checkbox("Save to Saved Profiles",key=f"wsave_{key_prefix}")
-            if show_d60: st.session_state[f"d60_{key_prefix}"]=st.checkbox("Birth time is exact to the minute (enables D60 karma chart)",key=f"wd60_{key_prefix}")
+            pre_gender=pre.get('gender', 'M') if pre else 'M'
+            st.session_state[f"gender_{key_prefix}"]=st.radio("Gender", ["M", "F"], index=0 if pre_gender=='M' else 1, key=f"wg_{key_prefix}", horizontal=True)
+            st.session_state[f"save_{key_prefix}"]=st.checkbox("💾 Save this person to My Saved Profiles for future use",key=f"wsave_{key_prefix}")
+            pre_exact = pre.get('exact_time', False) if pre else False
+            st.session_state[f"exact_{key_prefix}"]=st.checkbox("Birth time is exact to the minute", value=pre_exact, key=f"wexact_{key_prefix}")
             return {"type":"new","idx":key_prefix}
         else:
             opts_raw=sorted_profile_options()
@@ -2674,14 +3855,14 @@ def render_profile_form(key_prefix,show_d60=True,default_from_profile=None):
             sel=st.selectbox("Select Profile",labels,key=f"sel_{key_prefix}",label_visibility="collapsed")
             if sel!="— Select —":
                 _,p=opts_raw[labels.index(sel)-1]
-                st.success(f"Loaded: **{p['name']}** 📍 {p['place'].split(',')[0]}")
-                if show_d60: st.session_state[f"d60_{key_prefix}"]=st.checkbox("Birth time exact",key=f"wd60_{key_prefix}")
+                st.success(f"Loaded: **{p['name']}** 📍 {p['place'].split(',')[0]} ({p.get('gender', 'M')})")
+                st.session_state[f"exact_{key_prefix}"] = p.get('exact_time', False)
                 return {"type":"saved","data":p,"idx":key_prefix}
             return {"type":"empty_saved","idx":key_prefix}
 
 def resolve_profile(item):
-    i=item["idx"]; include_d60=st.session_state.get(f"d60_{i}",False)
-    if item["type"]=="saved": return item["data"],include_d60
+    i=item["idx"];
+    if item["type"]=="saved": return item["data"], item["data"].get('exact_time', False)
     if item["type"]=="empty_saved": st.error("Please select a valid profile."); st.stop()
     u_name=st.session_state.get(f"n_{i}","")
     if not u_name.strip(): st.error("Enter a name."); st.stop()
@@ -2701,10 +3882,12 @@ def resolve_profile(item):
         if not geo: st.error(f"'{u_place}' not found."); st.stop()
         fl,flon,fp=geo; ftz=timezone_for_latlon(fl,flon)
         if not ftz: st.error("Timezone detection failed."); st.stop()
-    prof={"name":u_name.strip(),"date":u_date.isoformat(),"time":u_time.strftime("%H:%M"),"place":fp,"lat":fl,"lon":flon,"tz":ftz}
+    u_gender=st.session_state.get(f"gender_{i}","M")
+    u_exact=st.session_state.get(f"exact_{i}",False)
+    prof={"name":u_name.strip(),"date":u_date.isoformat(),"time":u_time.strftime("%H:%M"),"place":fp,"lat":fl,"lon":flon,"tz":ftz, "gender": u_gender, "exact_time": u_exact}
     if st.session_state.get(f"save_{i}",False) and not is_duplicate_in_db(prof):
         st.session_state.db.append(prof); sync_db()
-    return prof,include_d60
+    return prof, u_exact
 
 # ═══════════════════════════════════════════════════════════
 # SIDEBAR
@@ -3420,21 +4603,33 @@ def _run_oracle(mission):
 
             # ── MATCHMAKING ─────────────────────────────────────────
             elif mission=="Matchmaking / Compatibility":
-                ma=get_moon_lon_from_profile(profiles[0]); mb=get_moon_lon_from_profile(profiles[1])
-                koota=calculate_ashta_koota(ma,mb)
-                jda,dtla,_=local_to_julian_day(date.fromisoformat(profiles[0]['date']),datetime.strptime(profiles[0]['time'],"%H:%M").time(),profiles[0]['tz'])
-                pla={pn:get_planet_longitude_and_speed(jda,pid) for pn,pid in PLANETS.items()}
-                laga=sign_index_from_lon(get_lagna_and_cusps(jda,profiles[0]['lat'],profiles[0]['lon'])[0])
-                ma_d=check_manglik_dosha(laga,sign_index_from_lon(pla["Moon"][0]),sign_index_from_lon(pla["Mars"][0]))
-                jdb,dtlb,_=local_to_julian_day(date.fromisoformat(profiles[1]['date']),datetime.strptime(profiles[1]['time'],"%H:%M").time(),profiles[1]['tz'])
-                plb={pn:get_planet_longitude_and_speed(jdb,pid) for pn,pid in PLANETS.items()}
-                lagb=sign_index_from_lon(get_lagna_and_cusps(jdb,profiles[1]['lat'],profiles[1]['lon'])[0])
-                mb_d=check_manglik_dosha(lagb,sign_index_from_lon(plb["Moon"][0]),sign_index_from_lon(plb["Mars"][0]))
-                canc=get_manglik_cancellation_verdict(ma_d,mb_d)
-                final=build_matchmaking_prompt(
-                    generate_astrology_dossier(profiles[0],d60s[0]),
-                    generate_astrology_dossier(profiles[1],d60s[1]),
-                    koota, canc)
+                # Ensure Gender is explicit
+                p_boy = profiles[0] if profiles[0].get('gender') == 'M' else profiles[1]
+                p_girl = profiles[1] if p_boy == profiles[0] else profiles[0]
+                if p_boy == p_girl: p_boy = profiles[0]; p_girl = profiles[1] # fallback
+                
+                ma = get_moon_lon_from_profile(p_boy); mb = get_moon_lon_from_profile(p_girl)
+                
+                jda, dtla, _ = local_to_julian_day(date.fromisoformat(p_boy['date']), datetime.strptime(p_boy['time'], "%H:%M").time(), p_boy['tz'])
+                pla = {pn: get_planet_longitude_and_speed(jda, pid) for pn, pid in PLANETS.items()}
+                laga = sign_index_from_lon(get_lagna_and_cusps(jda, p_boy['lat'], p_boy['lon'])[0])
+                ma_d = check_manglik_dosha(laga, sign_index_from_lon(pla["Moon"][0]), sign_index_from_lon(pla["Mars"][0]))
+                
+                jdb, dtlb, _ = local_to_julian_day(date.fromisoformat(p_girl['date']), datetime.strptime(p_girl['time'], "%H:%M").time(), p_girl['tz'])
+                plb = {pn: get_planet_longitude_and_speed(jdb, pid) for pn, pid in PLANETS.items()}
+                lagb = sign_index_from_lon(get_lagna_and_cusps(jdb, p_girl['lat'], p_girl['lon'])[0])
+                mb_d = check_manglik_dosha(lagb, sign_index_from_lon(plb["Moon"][0]), sign_index_from_lon(plb["Mars"][0]))
+                
+                canc = get_manglik_cancellation_verdict(ma_d, mb_d)
+                
+                dos_a = generate_astrology_dossier(p_boy, d60s[profiles.index(p_boy)])
+                dos_b = generate_astrology_dossier(p_girl, d60s[profiles.index(p_girl)])
+                
+                koota_data, marital_a, marital_b, kp_a, kp_b, wed_percent = calculate_matchmaking_synastry(p_boy, p_girl, ma, mb, jda, jdb, dos_a, dos_b)
+                
+                final = build_matchmaking_prompt(
+                    dos_a, dos_b, koota_data, canc, p_boy, p_girl, marital_a, marital_b, kp_a, kp_b, wed_percent
+                )
 
                 st.info("📖 Generating compatibility reading...")
                 try:
@@ -3459,7 +4654,7 @@ def _run_oracle(mission):
                 try:
                     # htrh1.md = Raman Vol 1 — practical house strength and planetary dignity rules.
                     # Comparison needs to know what makes a planet/house strong, which this book explains.
-                    compare_book = get_knowledge_files(["htrh1.md"])
+                    compare_book = get_comparison_reference_digest()
                     result = generate_content_with_fallback(final, knowledge_files=compare_book)
                 except Exception as e:
                     result = f"⚠️ Reading paused ({str(e)[:100]}). Please try again in ~1 minute."
@@ -3808,8 +5003,9 @@ def show_vault():
             with cols[i%3]:
                 # Plain text rendering, no stray CSS
                 badge_html='<span class="def-badge">⭐ My Profile</span><br>' if is_def else ''
+                gnd = p.get('gender', 'M')
                 st.markdown(f"""<div class="prof-card {'prof-card-def' if is_def else 'prof-card-norm'}">
-{badge_html}<p class="prof-name">{p['name']}</p>
+{badge_html}<p class="prof-name">{p['name']} ({gnd})</p>
 <p class="prof-sub">{format_date_ui(p['date'])} · {p['time']}</p>
 <p class="prof-sub">📍 {p['place'].split(',')[0]}</p>
 </div>""",unsafe_allow_html=True)
@@ -3844,6 +5040,9 @@ def show_vault():
             with t1: u_hr=st.number_input("Hour",1,12,dhr,key="ve_hr")
             with t2: u_mi=st.number_input("Min",0,59,pt.minute,key="ve_mi")
             with t3: u_am=st.selectbox("AM/PM",["AM","PM"],index=dai,key="ve_am")
+            pre_gnd = pd_.get('gender', 'M')
+            u_gender = st.radio("Gender", ["M", "F"], index=0 if pre_gnd=='M' else 1, key="ve_gnd", horizontal=True)
+            u_exact = st.checkbox("Exact Time Known", value=pd_.get('exact_time', False), key="ve_exact")
         with e2:
             is_m=pd_['place']=="Manual Coordinates"
             u_place=st.text_input("Birth Place","" if is_m else pd_['place'],key="ve_p")
@@ -3868,7 +5067,7 @@ def show_vault():
                 if det_lat is None: st.error("Enter valid birth place."); st.stop()
                 fl2,fln2,ftz2,fp2=det_lat,det_lon,det_tz,det_place
                 if not ftz2: st.error("Timezone failed."); st.stop()
-            st.session_state.db[ei]={"name":u_name,"date":u_date.isoformat(),"time":time(h24,u_mi).strftime("%H:%M"),"place":fp2,"lat":fl2,"lon":fln2,"tz":ftz2}
+            st.session_state.db[ei]={"name":u_name,"date":u_date.isoformat(),"time":time(h24,u_mi).strftime("%H:%M"),"place":fp2,"lat":fl2,"lon":fln2,"tz":ftz2, "gender": u_gender, "exact_time": u_exact}
             st.session_state.editing_idx=None; sync_db(); st.rerun()
         if b2.button("Cancel"): st.session_state.editing_idx=None; st.rerun()
 
@@ -3886,6 +5085,8 @@ def show_vault():
                 with t1: v_h=st.number_input("Hour",1,12,12,key="v_new_h")
                 with t2: v_m=st.number_input("Min",0,59,0,key="v_new_m")
                 with t3: v_a=st.selectbox("AM/PM",["AM","PM"],index=1,key="v_new_a")
+                v_gender = st.radio("Gender", ["M", "F"], index=0, key="v_new_gnd", horizontal=True)
+                v_exact = st.checkbox("Exact Time Known", value=False, key="v_new_exact")
             with c2:
                 v_p=st.text_input("Birth Place (City, Country)",key="v_new_p")
                 v_man=st.checkbox("Manual coordinates",key="v_new_man")
@@ -3907,7 +5108,7 @@ def show_vault():
                     geo=geocode_place(v_p.strip())
                     if not geo: st.error("Location not found."); st.stop()
                     lat,lon,pn=geo; tz=timezone_for_latlon(lat,lon)
-                new_prof={"name":v_n.strip(),"date":v_d.isoformat(),"time":time(h24,v_m).strftime("%H:%M"),"place":pn,"lat":lat,"lon":lon,"tz":tz}
+                new_prof={"name":v_n.strip(),"date":v_d.isoformat(),"time":time(h24,v_m).strftime("%H:%M"),"place":pn,"lat":lat,"lon":lon,"tz":tz, "gender": v_gender, "exact_time": v_exact}
                 if not is_duplicate_in_db(new_prof):
                     st.session_state.db.append(new_prof); sync_db()
                     if also_def: set_default_profile(len(st.session_state.db)-1)
