@@ -10,5 +10,3 @@ mediapipe
 numpy
 Pillow
 requests
-markdown
-xhtml2pdf
