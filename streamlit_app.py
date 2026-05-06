@@ -674,148 +674,84 @@ RESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN:
 # THE UNIVERSAL AI CHAT ENGINE
 # ═══════════════════════════════════════════════════════════
 
-@st.cache_data(show_spinner=False)
-def generate_branded_pdf(text, title="Astro Suite Reading"):
-    try:
-        import markdown
-        from xhtml2pdf import pisa
-        import io
-        
-        html_content = markdown.markdown(text)
-        
-        html = f"""
-        <html>
-        <head>
-        <style>
-            @page {{
-                size: A4 portrait;
-                margin: 2cm;
-                @frame header_frame {{
-                    -pdf-frame-content: header_content;
-                    left: 50pt; width: 512pt; top: 30pt; height: 50pt;
-                }}
-                @frame footer_frame {{
-                    -pdf-frame-content: footer_content;
-                    left: 50pt; width: 512pt; top: 800pt; height: 20pt;
-                }}
-            }}
-            body {{
-                font-family: Helvetica, Arial, sans-serif;
-                font-size: 13px;
-                color: #222222;
-                line-height: 1.6;
-            }}
-            h1, h2, h3 {{ color: #4A148C; margin-top: 15px; margin-bottom: 10px; }}
-            .brand {{ font-size: 26px; font-weight: bold; color: #4A148C; text-align: center; letter-spacing: 2px; }}
-            .subtitle {{ font-size: 12px; text-align: center; margin-bottom: 25px; color: #777; letter-spacing: 1px; text-transform: uppercase; }}
-            hr {{ color: #DDDDDD; margin-bottom: 20px; }}
-            ul {{ margin-bottom: 15px; }}
-            li {{ margin-bottom: 8px; }}
-            strong {{ color: #333333; }}
-        </style>
-        </head>
-        <body>
-            <div id="header_content">
-                <div class="brand">{title}</div>
-                <div class="subtitle">Personalized Cosmic Reading</div>
-                <hr/>
-            </div>
-            <div id="footer_content" style="text-align:center; font-size:10px; color:#999; border-top: 1px solid #EEE; padding-top: 10px;">
-                Page <pdf:pagenumber> of <pdf:pagecount> - Generated securely by {title}
-            </div>
-            {html_content}
-        </body>
-        </html>
-        """
-        
-        pdf_buffer = io.BytesIO()
-        pisa_status = pisa.CreatePDF(io.StringIO(html), dest=pdf_buffer)
-        if pisa_status.err: return None
-        return pdf_buffer.getvalue()
-    except Exception as e:
-        return None
-
 def render_share_buttons(text, title="Astro Suite"):
     import base64
     import streamlit.components.v1 as components
     
     st.markdown("<br>", unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
+    b64_text = base64.b64encode(text.encode('utf-8')).decode('utf-8')
     
-    with c1:
-        pdf_bytes = generate_branded_pdf(text, title)
-        if pdf_bytes:
-            st.download_button(
-                label="📄 Save as Branded PDF",
-                data=pdf_bytes,
-                file_name=f"{title.replace(' ', '_')}_Reading.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
-            
-    with c2:
-        b64_text = base64.b64encode(text.encode('utf-8')).decode('utf-8')
-        html = f"""
-        <div style="font-family: 'Source Sans Pro', sans-serif;">
-            <button id="shareBtn" style="
-                width: 100%;
-                padding: 0.5rem 1rem;
-                background-color: transparent;
-                color: #ffffff;
-                border: 1px solid rgba(250, 250, 250, 0.2);
-                border-radius: 0.5rem;
-                cursor: pointer;
-                font-size: 1rem;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 8px;
-                transition: all 0.2s;
-            " onmouseover="this.style.borderColor='#ff4b4b'; this.style.color='#ff4b4b';"
-               onmouseout="this.style.borderColor='rgba(250, 250, 250, 0.2)'; this.style.color='#ffffff';">
-                <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
-                Share Reading
-            </button>
-            <div id="msg" style="text-align:center; font-size:0.8rem; margin-top:5px; color:#999; opacity:0; transition:opacity 0.3s;">Copied to clipboard!</div>
-        </div>
-        <script>
-            const btn = document.getElementById('shareBtn');
-            const msg = document.getElementById('msg');
-            const raw_text = decodeURIComponent(escape(window.atob('{b64_text}')));
-            
-            btn.addEventListener('click', async () => {{
-                if (navigator.share) {{
-                    try {{
-                        await navigator.share({{
-                            title: '{title} Reading',
-                            text: raw_text
-                        }});
-                    }} catch(err) {{
-                        fallback(raw_text);
-                    }}
-                }} else {{
-                    fallback(raw_text);
-                }}
+    html = f"""
+    <div style="font-family: 'Source Sans Pro', sans-serif; display: flex; gap: 10px; padding: 5px;">
+        <button id="pdfBtn" style="flex: 1; padding: 0.5rem 1rem; background-color: transparent; color: #ffffff; border: 1px solid rgba(250, 250, 250, 0.2); border-radius: 0.5rem; cursor: pointer; font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s;" onmouseover="this.style.borderColor='#ff4b4b'; this.style.color='#ff4b4b';" onmouseout="this.style.borderColor='rgba(250, 250, 250, 0.2)'; this.style.color='#ffffff';">
+            📄 Save Branded PDF
+        </button>
+        <button id="shareBtn" style="flex: 1; padding: 0.5rem 1rem; background-color: transparent; color: #ffffff; border: 1px solid rgba(250, 250, 250, 0.2); border-radius: 0.5rem; cursor: pointer; font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s;" onmouseover="this.style.borderColor='#ff4b4b'; this.style.color='#ff4b4b';" onmouseout="this.style.borderColor='rgba(250, 250, 250, 0.2)'; this.style.color='#ffffff';">
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+            Share Reading
+        </button>
+    </div>
+    <div id="msg" style="text-align:center; font-size:0.8rem; margin-top:5px; color:#999; opacity:0; transition:opacity 0.3s;">Action completed!</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script>
+        const raw_text = decodeURIComponent(escape(window.atob('{b64_text}')));
+        const msg = document.getElementById('msg');
+        
+        function showMsg(text) {{
+            msg.innerText = text;
+            msg.style.opacity = 1;
+            setTimeout(() => msg.style.opacity = 0, 3000);
+        }}
+
+        // SHARE LOGIC
+        document.getElementById('shareBtn').addEventListener('click', async () => {{
+            if (navigator.share) {{
+                try {{ await navigator.share({{ title: '{title} Reading', text: raw_text }}); }} 
+                catch(err) {{ fallback(raw_text); }}
+            }} else {{ fallback(raw_text); }}
+        }});
+        
+        function fallback(txt) {{
+            navigator.clipboard.writeText(txt).then(() => showMsg("Copied to clipboard!"))
+            .catch(err => {{
+                const el = document.createElement('textarea');
+                el.value = txt; document.body.appendChild(el); el.select();
+                document.execCommand('copy'); document.body.removeChild(el);
+                showMsg("Copied to clipboard!");
             }});
-            
-            function fallback(txt) {{
-                navigator.clipboard.writeText(txt).then(() => {{
-                    msg.style.opacity = 1;
-                    setTimeout(() => msg.style.opacity = 0, 3000);
-                }}).catch(err => {{
-                    const el = document.createElement('textarea');
-                    el.value = txt;
-                    document.body.appendChild(el);
-                    el.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(el);
-                    msg.style.opacity = 1;
-                    setTimeout(() => msg.style.opacity = 0, 3000);
-                }});
-            }}
-        </script>
-        """
-        components.html(html, height=70)
+        }}
+
+        // PDF LOGIC
+        document.getElementById('pdfBtn').addEventListener('click', () => {{
+            showMsg("Generating PDF...");
+            const parsedHTML = marked.parse(raw_text);
+            const wrapper = document.createElement('div');
+            wrapper.style.padding = '40px'; wrapper.style.fontFamily = 'Helvetica, Arial, sans-serif';
+            wrapper.style.color = '#222'; wrapper.style.lineHeight = '1.6';
+            wrapper.innerHTML = `
+                <div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #EEE; padding-bottom: 20px;">
+                    <h1 style="color: #4A148C; font-size: 28px; letter-spacing: 2px; margin: 0;">{title}</h1>
+                    <p style="color: #777; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; margin-top: 5px;">Personalized Cosmic Reading</p>
+                </div>
+                <div style="font-size: 14px;">${{parsedHTML}}</div>
+                <div style="margin-top: 40px; text-align: center; font-size: 10px; color: #999; border-top: 1px solid #EEE; padding-top: 15px;">
+                    Generated securely by {title}
+                </div>
+            `;
+            const opt = {{
+                margin: [10, 0, 10, 0],
+                filename: '{title.replace(" ", "_")}_Reading.pdf',
+                image: {{ type: 'jpeg', quality: 0.98 }},
+                html2canvas: {{ scale: 2, useCORS: true }},
+                jsPDF: {{ unit: 'mm', format: 'a4', orientation: 'portrait' }}
+            }};
+            html2pdf().set(opt).from(wrapper).save().then(() => showMsg("PDF Downloaded!"));
+        }});
+    </script>
+    """
+    components.html(html, height=100)
 
 def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting...", knowledge_files=None, preferred_model=None):
     """
