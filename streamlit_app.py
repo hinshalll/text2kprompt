@@ -15,7 +15,9 @@ from streamlit_local_storage import LocalStorage
 # ═══════════════════════════════════════════════════════════
 # APP CONFIG
 # ═══════════════════════════════════════════════════════════
-st.set_page_config(page_title="ASTRO SUITE beta", page_icon="🪐", layout="wide",
+
+APP_NAME = "ASTRO SUITE beta"
+st.set_page_config(page_title=APP_NAME, page_icon="🪐", layout="wide",
                    initial_sidebar_state="collapsed")
 try: swe.set_ephe_path("ephe")
 except: pass
@@ -671,6 +673,150 @@ RESPOND ONLY IN VALID JSON FORMAT. NO MARKDOWN:
 # ═══════════════════════════════════════════════════════════
 # THE UNIVERSAL AI CHAT ENGINE
 # ═══════════════════════════════════════════════════════════
+
+@st.cache_data(show_spinner=False)
+def generate_branded_pdf(text, title="Astro Suite Reading"):
+    try:
+        import markdown
+        from xhtml2pdf import pisa
+        import io
+        
+        html_content = markdown.markdown(text)
+        
+        html = f"""
+        <html>
+        <head>
+        <style>
+            @page {{
+                size: A4 portrait;
+                margin: 2cm;
+                @frame header_frame {{
+                    -pdf-frame-content: header_content;
+                    left: 50pt; width: 512pt; top: 30pt; height: 50pt;
+                }}
+                @frame footer_frame {{
+                    -pdf-frame-content: footer_content;
+                    left: 50pt; width: 512pt; top: 800pt; height: 20pt;
+                }}
+            }}
+            body {{
+                font-family: Helvetica, Arial, sans-serif;
+                font-size: 13px;
+                color: #222222;
+                line-height: 1.6;
+            }}
+            h1, h2, h3 {{ color: #4A148C; margin-top: 15px; margin-bottom: 10px; }}
+            .brand {{ font-size: 26px; font-weight: bold; color: #4A148C; text-align: center; letter-spacing: 2px; }}
+            .subtitle {{ font-size: 12px; text-align: center; margin-bottom: 25px; color: #777; letter-spacing: 1px; text-transform: uppercase; }}
+            hr {{ color: #DDDDDD; margin-bottom: 20px; }}
+            ul {{ margin-bottom: 15px; }}
+            li {{ margin-bottom: 8px; }}
+            strong {{ color: #333333; }}
+        </style>
+        </head>
+        <body>
+            <div id="header_content">
+                <div class="brand">{title}</div>
+                <div class="subtitle">Personalized Cosmic Reading</div>
+                <hr/>
+            </div>
+            <div id="footer_content" style="text-align:center; font-size:10px; color:#999; border-top: 1px solid #EEE; padding-top: 10px;">
+                Page <pdf:pagenumber> of <pdf:pagecount> - Generated securely by {title}
+            </div>
+            {html_content}
+        </body>
+        </html>
+        """
+        
+        pdf_buffer = io.BytesIO()
+        pisa_status = pisa.CreatePDF(io.StringIO(html), dest=pdf_buffer)
+        if pisa_status.err: return None
+        return pdf_buffer.getvalue()
+    except Exception as e:
+        return None
+
+def render_share_buttons(text, title="Astro Suite"):
+    import base64
+    import streamlit.components.v1 as components
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        pdf_bytes = generate_branded_pdf(text, title)
+        if pdf_bytes:
+            st.download_button(
+                label="📄 Save as Branded PDF",
+                data=pdf_bytes,
+                file_name=f"{title.replace(' ', '_')}_Reading.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+            
+    with c2:
+        b64_text = base64.b64encode(text.encode('utf-8')).decode('utf-8')
+        html = f"""
+        <div style="font-family: 'Source Sans Pro', sans-serif;">
+            <button id="shareBtn" style="
+                width: 100%;
+                padding: 0.5rem 1rem;
+                background-color: transparent;
+                color: #ffffff;
+                border: 1px solid rgba(250, 250, 250, 0.2);
+                border-radius: 0.5rem;
+                cursor: pointer;
+                font-size: 1rem;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                transition: all 0.2s;
+            " onmouseover="this.style.borderColor='#ff4b4b'; this.style.color='#ff4b4b';"
+               onmouseout="this.style.borderColor='rgba(250, 250, 250, 0.2)'; this.style.color='#ffffff';">
+                <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+                Share Reading
+            </button>
+            <div id="msg" style="text-align:center; font-size:0.8rem; margin-top:5px; color:#999; opacity:0; transition:opacity 0.3s;">Copied to clipboard!</div>
+        </div>
+        <script>
+            const btn = document.getElementById('shareBtn');
+            const msg = document.getElementById('msg');
+            const raw_text = decodeURIComponent(escape(window.atob('{b64_text}')));
+            
+            btn.addEventListener('click', async () => {{
+                if (navigator.share) {{
+                    try {{
+                        await navigator.share({{
+                            title: '{title} Reading',
+                            text: raw_text
+                        }});
+                    }} catch(err) {{
+                        fallback(raw_text);
+                    }}
+                }} else {{
+                    fallback(raw_text);
+                }}
+            }});
+            
+            function fallback(txt) {{
+                navigator.clipboard.writeText(txt).then(() => {{
+                    msg.style.opacity = 1;
+                    setTimeout(() => msg.style.opacity = 0, 3000);
+                }}).catch(err => {{
+                    const el = document.createElement('textarea');
+                    el.value = txt;
+                    document.body.appendChild(el);
+                    el.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(el);
+                    msg.style.opacity = 1;
+                    setTimeout(() => msg.style.opacity = 0, 3000);
+                }});
+            }}
+        </script>
+        """
+        components.html(html, height=70)
+
 def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting...", knowledge_files=None, preferred_model=None):
     """
     Universal streaming AI component with full fallback chain.
@@ -3136,40 +3282,9 @@ def calculate_matchmaking_synastry(prof_a, prof_b, ma, mb, jda, jdb, dos_a, dos_
     kp_a = extract_kp_promise(dos_a, 7)
     kp_b = extract_kp_promise(dos_b, 7)
     
-    # Calculate Wedding Percentage (Weighted)
-    # Weights: D9 Cross-Match (35%), UL Harmony (25%), KP Promise (25%), Ashtakoot (10%), Doshas (5%)
-    
-    # 1. KP Promise (0 to 3 scale)
-    kp_score_a = min(kp_a, 2) / 2.0
-    kp_score_b = min(kp_b, 2) / 2.0
-    kp_percent = ((kp_score_a + kp_score_b) / 2.0) * 100 * 0.25
-    
-    # 2. UL Harmony (Kendra/Trine is best)
-    ul_a_idx = SIGNS.index(marital_a['UL_Sign'])
-    ul_b_idx = SIGNS.index(marital_b['UL_Sign'])
-    ul_dist = min((ul_a_idx - ul_b_idx) % 12, (ul_b_idx - ul_a_idx) % 12)
-    ul_score = 100 if ul_dist in [0, 4] else (75 if ul_dist in [3, 5] else (50 if ul_dist in [1, 2] else 25))
-    ul_percent = ul_score * 0.25
-    
-    # 3. Cross-Match (D9 7th / D1 7th vs Lagna/Moon)
-    cm_score = 75 # Base
-    cm_percent = cm_score * 0.35
-    
-    # 4. Ashtakoot
-    k_score = koota_data['score']
-    k_percent = min((k_score / 36.0) * 100, 100) * 0.10
-    
-    # 5. Dosha Penalty
-    dosha_penalty = 0
-    if koota_data['nadi'] == 0 and koota_data['nadi_note'] == "": dosha_penalty += 15
-    if koota_data['bhakoot'] == 0: dosha_penalty += 10
-    dosha_percent = max((100 - dosha_penalty), 0) * 0.05
-    
-    final_percentage = round(kp_percent + ul_percent + cm_percent + k_percent + dosha_percent)
-    
-    return koota_data, marital_a, marital_b, kp_a, kp_b, final_percentage
+    return koota_data, marital_a, marital_b, kp_a, kp_b
 
-def build_matchmaking_prompt(dos_a, dos_b, koota, canc, prof_a, prof_b, marital_a, marital_b, kp_a, kp_b, wed_percent):
+def build_matchmaking_prompt(dos_a, dos_b, koota, canc, prof_a, prof_b, marital_a, marital_b, kp_a, kp_b):
     kp_labels = {3: "STRONGLY PROMISED", 2: "PARTIALLY PROMISED", 1: "UNCLEAR", 0: "DENIED"}
     return f"""{GUARDRAILS}
 
@@ -3205,16 +3320,25 @@ Person 2:
 - Upapada Lagna (Reality of Marriage): {marital_b['UL_Sign']}
 - Darapada A7 (Desires): {marital_b['A7_Sign']}
 
-CHANCES OF WEDDING PERCENTAGE: {wed_percent}%
+
 </PYTHON_COMPUTED_DATA>
 
 <mission>
 Write a deeply insightful, empathetic compatibility reading. 
 Use markdown heavily for beautiful formatting. Be extremely detailed about the factors that matter.
 
-### 1. The Ashtakoota (36 Gunas) Explained
-Break down their score of {koota['score']}/36. **Explain what the 8 groups (Varna, Vashya, Tara, Yoni, Graha Maitri, Gana, Bhakoot, Nadi) actually mean** for their relationship. Note the Stree-Deergha and Mahendra Koota.
-*Crucial framing: Emphasize that while Gunas show personality similarity, they do NOT dictate if a wedding will happen, as people can choose to marry regardless of this score.*
+### 1. The Ashtakoota (36 Gunas) Deep Dive
+Break down their score of {koota['score']}/36 in extreme detail. Elaborate on what each of the 8 Kootas means for them specifically based on their individual scores:
+- **Varna (Work & Spiritual Compatibility):** {koota['varna']}/1 
+- **Vashya (Dominance & Magnetic Attraction):** {koota['vashya']}/2
+- **Tara (Destiny & Auspiciousness):** {koota['tara']}/3
+- **Yoni (Intimacy & Physical Compatibility):** {koota['yoni']}/4
+- **Graha Maitri (Mental & Psychological Friendship):** {koota['maitri']}/5
+- **Gana (Temperament & Life Approach):** {koota['gana']}/6
+- **Bhakoot (Emotional Flow & Prosperity):** {koota['bhakoot']}/7
+- **Nadi (Genetic & Spiritual Lifeforce):** {koota['nadi']}/8
+Discuss what their specific score in each category reveals about their day-to-day life. Also explain the impact of Stree-Deergha ({koota['stree_deergha']}) and Mahendra Koota ({koota['mahendra']}).
+*Crucial framing: Emphasize that while Gunas show deep personality and psychological similarity, they do NOT dictate if a wedding will happen, as people can choose to marry regardless of this score.*
 
 ### 2. Doshas & Frictions
 Discuss their Nadi or Bhakoot doshas (if any) and if they cancel out (check the notes: {koota['nadi_note']}). Discuss the Manglik status ({canc}). 
@@ -3229,7 +3353,7 @@ Explain what the reality of their marriage will look like, including familial ha
 
 ### 5. Final Verdict: What to Do & What to Avoid
 Provide the final verdict. List specific, actionable points on "What to Do" and "What to Avoid" *as a couple as a whole* to make this relationship thrive.
-At the very end, present the "Chances of Wedding Percentage" ({wed_percent}%), explicitly stating that this score is heavily weighted towards D9 Cross-Matching, KP Promise, and UL Harmony rather than just the traditional Ashtakoota, reflecting the true probability of union.
+Provide a final absolute verdict on whether they are compatible from a traditional Guna perspective.
 </mission>
 
 <person_1_chart>{dos_a}</person_1_chart>
@@ -3238,6 +3362,215 @@ At the very end, present the "Chances of Wedding Percentage" ({wed_percent}%), e
 
 
 
+
+
+def calculate_destiny_confirmation(prof_a, prof_b, jda, jdb, dos_a, dos_b):
+    pla = {pn: get_planet_longitude_and_speed(jda, pid) for pn, pid in PLANETS.items()}
+    ra_a, _ = get_planet_longitude_and_speed(jda, swe.MEAN_NODE); pla["Rahu"] = (ra_a, 0); pla["Ketu"] = ((ra_a + 180) % 360, 0)
+    plb = {pn: get_planet_longitude_and_speed(jdb, pid) for pn, pid in PLANETS.items()}
+    ra_b, _ = get_planet_longitude_and_speed(jdb, swe.MEAN_NODE); plb["Rahu"] = (ra_b, 0); plb["Ketu"] = ((ra_b + 180) % 360, 0)
+    
+    laga = sign_index_from_lon(get_lagna_and_cusps(jda, prof_a['lat'], prof_a['lon'])[0])
+    lagb = sign_index_from_lon(get_lagna_and_cusps(jdb, prof_b['lat'], prof_b['lon'])[0])
+    
+    moona_sidx = sign_index_from_lon(pla["Moon"][0])
+    moonb_sidx = sign_index_from_lon(plb["Moon"][0])
+    
+    laga_lord = SIGN_LORDS_MAP[laga]
+    lagb_lord = SIGN_LORDS_MAP[lagb]
+    
+    def get_dk_ak(pl):
+        degs = [(p, lon % 30) for p, (lon, _) in pl.items() if p not in ["Rahu", "Ketu"]]
+        degs.sort(key=lambda x: x[1], reverse=True)
+        return degs[0][0], degs[-1][0] 
+        
+    aka, dka = get_dk_ak(pla)
+    akb, dkb = get_dk_ak(plb)
+    
+    marital_a = calculate_marital_analysis(jda, prof_a['lat'], prof_a['lon'])
+    marital_b = calculate_marital_analysis(jdb, prof_b['lat'], prof_b['lon'])
+    
+    kp_a = extract_kp_promise(dos_a, 7)
+    kp_b = extract_kp_promise(dos_b, 7)
+    
+    from datetime import datetime, date
+    dt_loc_a = datetime.combine(date.fromisoformat(prof_a['date']) if isinstance(prof_a['date'], str) else prof_a['date'], datetime.strptime(prof_a['time'], "%H:%M").time() if isinstance(prof_a['time'], str) else prof_a['time'])
+    dt_loc_b = datetime.combine(date.fromisoformat(prof_b['date']) if isinstance(prof_b['date'], str) else prof_b['date'], datetime.strptime(prof_b['time'], "%H:%M").time() if isinstance(prof_b['time'], str) else prof_b['time'])
+    
+    d_info_a = build_vimshottari_timeline(dt_loc_a, pla["Moon"][0], datetime.now())
+    d_info_b = build_vimshottari_timeline(dt_loc_b, plb["Moon"][0], datetime.now())
+    
+    def is_friend(p1, p2):
+        friends = {
+            "Sun": ["Moon", "Mars", "Jupiter"], "Moon": ["Sun", "Mercury"],
+            "Mars": ["Sun", "Moon", "Jupiter"], "Mercury": ["Sun", "Venus"],
+            "Jupiter": ["Sun", "Moon", "Mars"], "Venus": ["Mercury", "Saturn"],
+            "Saturn": ["Mercury", "Venus"]
+        }
+        return p2 in friends.get(p1, [])
+
+    def score_blueprint(d9_lord, core_lords):
+        if d9_lord in core_lords: return 10
+        if any(is_friend(d9_lord, cl) for cl in core_lords): return 7
+        return 3
+
+    def check_nodal_obsession(rahu_lon_a, ketu_lon_a, core_lons_b):
+        ra_sign = sign_index_from_lon(rahu_lon_a)
+        ke_sign = sign_index_from_lon(ketu_lon_a)
+        for cl in core_lons_b:
+            csign = sign_index_from_lon(cl)
+            if csign == ra_sign or csign == ke_sign: return True
+        return False
+
+    core_b_lons = [plb["Moon"][0], plb["Venus"][0], plb[lagb_lord][0]]
+    core_a_lons = [pla["Moon"][0], pla["Venus"][0], pla[laga_lord][0]]
+    
+    obsession_a_to_b = check_nodal_obsession(pla["Rahu"][0], pla["Ketu"][0], core_b_lons)
+    obsession_b_to_a = check_nodal_obsession(plb["Rahu"][0], plb["Ketu"][0], core_a_lons)
+
+    score_promise = (min(kp_a, 3)/3 * 10) + (min(kp_b, 3)/3 * 10)
+    
+    score_d9_a = score_blueprint(marital_a['D9_7th_Lord'], [lagb_lord, SIGN_LORDS_MAP[moonb_sidx]])
+    score_d9_b = score_blueprint(marital_b['D9_7th_Lord'], [laga_lord, SIGN_LORDS_MAP[moona_sidx]])
+    
+    ul_lord_a = SIGN_LORDS_MAP[SIGNS.index(marital_a['UL_Sign'])]
+    ul_lord_b = SIGN_LORDS_MAP[SIGNS.index(marital_b['UL_Sign'])]
+    score_ul_a = 5 if ul_lord_a in [lagb_lord, SIGN_LORDS_MAP[moonb_sidx]] else 0
+    score_ul_b = 5 if ul_lord_b in [laga_lord, SIGN_LORDS_MAP[moona_sidx]] else 0
+    
+    score_soul = 0
+    if dka in [akb, lagb_lord]: score_soul += 2.5
+    if dkb in [aka, laga_lord]: score_soul += 2.5
+    
+    score_blueprint_total = score_d9_a + score_d9_b + score_ul_a + score_ul_b + score_soul
+    
+    def check_insertion(lord_a, sign_a, lag_b):
+        b_h7_sign = (lag_b + 6) % 12
+        if sign_a == b_h7_sign: return True
+        return False
+        
+    a_in_b7 = check_insertion(laga_lord, sign_index_from_lon(pla[laga_lord][0]), lagb)
+    b_in_a7 = check_insertion(lagb_lord, sign_index_from_lon(plb[lagb_lord][0]), laga)
+    
+    score_synastry = 0
+    if a_in_b7: score_synastry += 7.5
+    if b_in_a7: score_synastry += 7.5
+    if obsession_a_to_b: score_synastry += 5
+    if obsession_b_to_a: score_synastry += 5
+
+    def extract_h7_sig(dossier):
+        sigs = set()
+        if "KP PLANETARY SIGNIFICATORS" in dossier:
+            try:
+                lines = dossier.split("KP PLANETARY SIGNIFICATORS")[1].split("=")[0].split("\\n")
+                for line in lines:
+                    if "7" in line:
+                        p = line.split(":")[0].strip()
+                        if p in PLANETS: sigs.add(p)
+            except: pass
+        return sigs
+
+    sigs_a = extract_h7_sig(dos_a)
+    sigs_b = extract_h7_sig(dos_b)
+    shared_sigs = sigs_a.intersection(sigs_b)
+    
+    score_timing = 0
+    if len(shared_sigs) >= 2: score_timing = 20
+    elif len(shared_sigs) == 1: score_timing = 10
+
+    total_destiny_percentage = round(score_promise + score_blueprint_total + score_synastry + score_timing)
+
+    return {
+        "A": {"kp_promise": kp_a, "weak_warning": kp_a == 0, "sigs": list(sigs_a)},
+        "B": {"kp_promise": kp_b, "weak_warning": kp_b == 0, "sigs": list(sigs_b)},
+        "Blueprint": {
+            "A_D9_7th_Lord": marital_a['D9_7th_Lord'],
+            "B_Core": [lagb_lord, SIGN_LORDS_MAP[moonb_sidx]],
+            "B_D9_7th_Lord": marital_b['D9_7th_Lord'],
+            "A_Core": [laga_lord, SIGN_LORDS_MAP[moona_sidx]],
+            "A_UL": marital_a['UL_Sign'],
+            "B_UL": marital_b['UL_Sign'],
+            "A_DK": dka, "A_AK": aka,
+            "B_DK": dkb, "B_AK": akb
+        },
+        "Synastry": {
+            "A_Lagna_in_B_7th": a_in_b7,
+            "B_Lagna_in_A_7th": b_in_a7,
+            "A_Nodal_Obsession": obsession_a_to_b,
+            "B_Nodal_Obsession": obsession_b_to_a
+        },
+        "Timing": {
+            "A_Current_MD_AD": f"{d_info_a['current_md']} / {d_info_a['current_ad']}",
+            "B_Current_MD_AD": f"{d_info_b['current_md']} / {d_info_b['current_ad']}",
+            "Shared_Significators": list(shared_sigs)
+        },
+        "Percentage": total_destiny_percentage
+    }
+
+def build_destiny_confirmation_prompt(prof_a, prof_b, dos_a, dos_b, dest_data):
+    return f"""{GUARDRAILS}
+
+<SYSTEM>
+You are an elite Vedic Destiny Matchmaker analyzing the profound **Signal Correlation and Mutual Spouse Confirmation**.
+Does Person A's chart mathematically describe Person B as their destined spouse, and vice versa?
+
+MATH LOCK: Rely exclusively on the Python-computed matrix below. Do NOT recalculate planetary degrees or structural insertions.
+</SYSTEM>
+
+<PYTHON_COMPUTED_DESTINY_MATRIX>
+PERSON A: {prof_a['name']}
+PERSON B: {prof_b['name']}
+
+FINAL DESTINY CONFIRMATION SCORE: {dest_data['Percentage']}%
+
+### CATEGORY A: Foundational Promise (Is marriage internally permitted?)
+Person A KP Promise Score: {dest_data['A']['kp_promise']}/3 (Weak Warning: {dest_data['A']['weak_warning']})
+Person B KP Promise Score: {dest_data['B']['kp_promise']}/3 (Weak Warning: {dest_data['B']['weak_warning']})
+
+### CATEGORY B: Mutual Spouse Description (The Blueprint Match)
+1. D9 Blueprint:
+- Person A's Destined Spouse (D9 7th Lord): {dest_data['Blueprint']['A_D9_7th_Lord']} | Person B's Actual Core (Lagna/Moon Lords): {', '.join(dest_data['Blueprint']['B_Core'])}
+- Person B's Destined Spouse (D9 7th Lord): {dest_data['Blueprint']['B_D9_7th_Lord']} | Person A's Actual Core: {', '.join(dest_data['Blueprint']['A_Core'])}
+
+2. Manifestation Match (Upapada Lagna):
+- Person A's UL Sign: {dest_data['Blueprint']['A_UL']}
+- Person B's UL Sign: {dest_data['Blueprint']['B_UL']}
+
+3. The Soul Tie (Jaimini Karakas):
+- Person A's Soul (AK): {dest_data['Blueprint']['A_AK']} | Person A's Spouse Soul (DK): {dest_data['Blueprint']['A_DK']}
+- Person B's Soul (AK): {dest_data['Blueprint']['B_AK']} | Person B's Spouse Soul (DK): {dest_data['Blueprint']['B_DK']}
+
+### CATEGORY C: Structural Synastry (Architectural Cross-Links)
+- Person A's Lagna physically falls into Person B's 7th House: {dest_data['Synastry']['A_Lagna_in_B_7th']}
+- Person B's Lagna physically falls into Person A's 7th House: {dest_data['Synastry']['B_Lagna_in_A_7th']}
+- Nodal Karmic Obsession (Rahu/Ketu hitting Lagna/Moon/Venus): A on B ({dest_data['Synastry']['A_Nodal_Obsession']}), B on A ({dest_data['Synastry']['B_Nodal_Obsession']})
+
+### CATEGORY D: Timing Synchronization (The Reality Lock)
+- Person A's Active Calendar Dasha: {dest_data['Timing']['A_Current_MD_AD']}
+- Person B's Active Calendar Dasha: {dest_data['Timing']['B_Current_MD_AD']}
+- Shared Marriage Timing Significators (Planets that will trigger marriage for both simultaneously): {', '.join(dest_data['Timing']['Shared_Significators']) if dest_data['Timing']['Shared_Significators'] else "None (Timing may misalign)"}
+</PYTHON_COMPUTED_DESTINY_MATRIX>
+
+<mission>
+Provide a devastatingly accurate, elite-tier **Destiny Marriage Confirmation Reading**.
+Explain everything in deep detail, but make it very easy for anyone to understand without confusing astrological jargon.
+
+Stop talking about basic "compatibility". Analyze the deep **Signal Correlation**:
+1. Does Person B physically fulfill the exact D9 and UL spouse archetype demanded by Person A's chart? (And vice versa). 
+2. Is there a Jaimini Soul Tie (e.g. DK matching AK)?
+3. Do their physical structures interlock (Lagna in 7th)? Is there a Karmic Obsession (Rahu/Ketu axis)?
+4. Is their real-calendar timing synchronized to trigger the event? 
+
+**Chances of Marriage: {dest_data['Percentage']}%**
+
+**MANDATORY SECTION - KARMIC REMEDIES, SACRIFICES, AND ACTIONABLE DO'S:**
+If the Destiny Confirmation Score is low, or if the KP Promise is weak (Warning = True), you MUST explicitly explain that astrology is not fatalistic. Provide a bulleted list of profound, actionable "Do's" and psychological sacrifices required to force this marriage to manifest against the odds. If a chart denies marriage, explain how adopting the highest, most selfless vibration of the 7th house (surrender, spiritual devotion to partner, abandoning ego) can override the planetary denial. List exactly what actions they must consciously take to make this marriage happen despite the mathematical friction.
+
+Conclude with your absolute **FINAL VERDICT** on whether this union is mathematically destined to happen.
+</mission>
+
+<person_a_chart>{dos_a}</person_a_chart>
+<person_b_chart>{dos_b}</person_b_chart>"""
 
 def build_comparison_prompt(profiles_dossiers, criteria):
     python_rankings = calculate_and_rank_profiles(profiles_dossiers, criteria)
@@ -4440,11 +4773,15 @@ def show_oracle():
     components.html("""<script>setTimeout(function(){var b=window.parent.document.querySelector('button[aria-label="Collapse sidebar"]');if(b&&window.parent.innerWidth<=768)b.click();},80);</script>""",height=0,width=0)
     st.markdown("<h1>🔮 The Oracle</h1>",unsafe_allow_html=True)
     st.markdown("<p style='color:rgba(255,255,255,.6)'>Mathematically locked AI prompts from Swiss Ephemeris precision.</p>",unsafe_allow_html=True)
-    missions={"Deep Personal Analysis":"🔮 Full Life Reading","Matchmaking / Compatibility":"✦ Compatibility Match",
-              "Gochara / Live Transit":"🌍 Live Transit Analysis","Comparison (Multiple Profiles)":"⚖ Compare Profiles",
+    missions={"Deep Personal Analysis":"🔮 Full Life Reading",
+              "Matchmaking / Compatibility":"✦ Compatibility Match",
+              "Destiny & Marriage Chances":"💞 Marriage Chances Calculator",
+              "Gochara / Live Transit":"🌍 Live Transit Analysis",
+              "Comparison (Multiple Profiles)":"⚖ Compare Profiles",
               "Prashna Kundli":"🎯 Ask a Question"}
     descs={"Deep Personal Analysis":"Complete reading — personality, career, wealth, marriage, timing.",
-           "Matchmaking / Compatibility":"Ashta Koota + Manglik + KP marriage promise.",
+           "Matchmaking / Compatibility":"Ashta Koota + Manglik + Compatibility.",
+           "Destiny & Marriage Chances":"Advanced cross-chart confirmation matrix.",
            "Gochara / Live Transit":"How today's planets activate your natal chart right now.",
            "Comparison (Multiple Profiles)":"Rank multiple people with planetary evidence.",
            "Prashna Kundli":"Ask a specific question. Get Yes/No/Delayed."}
@@ -4602,6 +4939,33 @@ def _run_oracle(mission):
                 ]
 
             # ── MATCHMAKING ─────────────────────────────────────────
+            elif mission=="Destiny & Marriage Chances":
+                p_boy = profiles[0] if profiles[0].get('gender') == 'M' else profiles[1]
+                p_girl = profiles[1] if p_boy == profiles[0] else profiles[0]
+                if p_boy == p_girl: p_boy = profiles[0]; p_girl = profiles[1] # fallback
+                p_boy_idx = profiles.index(p_boy)
+                p_girl_idx = profiles.index(p_girl)
+                
+                st.info("Crunching Jaimini & D9 matrices...")
+                jda, _, _ = local_to_julian_day(date.fromisoformat(p_boy['date']) if isinstance(p_boy['date'], str) else p_boy['date'], datetime.strptime(p_boy['time'], "%H:%M").time() if isinstance(p_boy['time'], str) else p_boy['time'], p_boy['tz'])
+                jdb, _, _ = local_to_julian_day(date.fromisoformat(p_girl['date']) if isinstance(p_girl['date'], str) else p_girl['date'], datetime.strptime(p_girl['time'], "%H:%M").time() if isinstance(p_girl['time'], str) else p_girl['time'], p_girl['tz'])
+                
+                dos_a = generate_astrology_dossier(p_boy, d60s[p_boy_idx])
+                dos_b = generate_astrology_dossier(p_girl, d60s[p_girl_idx])
+                
+                dest_data = calculate_destiny_confirmation(p_boy, p_girl, jda, jdb, dos_a, dos_b)
+                
+                final = build_destiny_confirmation_prompt(p_boy, p_girl, dos_a, dos_b, dest_data)
+                
+                st.info("📖 Generating Destiny Marriage Matrix...")
+                marriage_book = get_knowledge_files(["htrh2.md"])
+                result = generate_content_with_fallback(final, knowledge_files=marriage_book)
+                if result:
+                    # Update session state with the result, removing markdown rendering here so stream_ai_with_followup handles it
+                    st.session_state[f"oracle_{mission}_history"] = [
+                        {"role": "user",  "parts": [final]},
+                        {"role": "model", "parts": [result]},
+                    ]
             elif mission=="Matchmaking / Compatibility":
                 # Ensure Gender is explicit
                 p_boy = profiles[0] if profiles[0].get('gender') == 'M' else profiles[1]
@@ -4625,10 +4989,10 @@ def _run_oracle(mission):
                 dos_a = generate_astrology_dossier(p_boy, d60s[profiles.index(p_boy)])
                 dos_b = generate_astrology_dossier(p_girl, d60s[profiles.index(p_girl)])
                 
-                koota_data, marital_a, marital_b, kp_a, kp_b, wed_percent = calculate_matchmaking_synastry(p_boy, p_girl, ma, mb, jda, jdb, dos_a, dos_b)
+                koota_data, marital_a, marital_b, kp_a, kp_b = calculate_matchmaking_synastry(p_boy, p_girl, ma, mb, jda, jdb, dos_a, dos_b)
                 
                 final = build_matchmaking_prompt(
-                    dos_a, dos_b, koota_data, canc, p_boy, p_girl, marital_a, marital_b, kp_a, kp_b, wed_percent
+                    dos_a, dos_b, koota_data, canc, p_boy, p_girl, marital_a, marital_b, kp_a, kp_b
                 )
 
                 st.info("📖 Generating compatibility reading...")
