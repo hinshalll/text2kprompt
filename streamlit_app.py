@@ -939,6 +939,12 @@ def stream_ai_with_followup(prompt, memory_key, spinner_text="Interpreting...", 
                 if not success:
                     res_ph.warning("⏳ Models are briefly at capacity. Please try your follow-up again in a moment.")
 
+    # ── STEP 4: SHARE / SAVE BUTTONS ──
+    if len(st.session_state[memory_key]) > 0:
+        # Combine all AI responses for the document
+        full_text = "\\n\\n---\\n\\n".join([msg["parts"][-1] for msg in st.session_state[memory_key] if msg["role"] == "model"])
+        render_share_buttons(full_text, title=APP_NAME)
+
 # ═══════════════════════════════════════════════════════════
 # ADVANCED ASTRO ENGINES
 # ═══════════════════════════════════════════════════════════
